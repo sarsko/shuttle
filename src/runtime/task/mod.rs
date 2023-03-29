@@ -60,12 +60,12 @@ pub(crate) struct Task {
     local_storage: StorageMap,
 
     // Arbitrarily settable tag which is inherited from the parent.
-    tag: i64,
+    tag: u64,
 }
 
 impl Task {
     /// Create a task from a continuation
-    fn new<F>(f: F, stack_size: usize, id: TaskId, name: Option<String>, clock: VectorClock, tag: i64) -> Self
+    fn new<F>(f: F, stack_size: usize, id: TaskId, name: Option<String>, clock: VectorClock, tag: u64) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
@@ -96,7 +96,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
-        tag: i64,
+        tag: u64,
     ) -> Self
     where
         F: FnOnce() + Send + 'static,
@@ -110,7 +110,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
-        tag: i64,
+        tag: u64,
     ) -> Self
     where
         F: Future<Output = ()> + Send + 'static,
@@ -285,11 +285,11 @@ impl Task {
         }
     }
 
-    pub(crate) fn get_tag(&self) -> i64 {
+    pub(crate) fn get_tag(&self) -> u64 {
         self.tag
     }
 
-    pub(crate) fn set_tag(&mut self, tag: i64) {
+    pub(crate) fn set_tag(&mut self, tag: u64) {
         self.tag = tag;
     }
 }
