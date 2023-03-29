@@ -58,11 +58,14 @@ pub(crate) struct Task {
     name: Option<String>,
 
     local_storage: StorageMap,
+
+    // Arbitrarily settable tag which is inherited from the parent.
+    tag: i64,
 }
 
 impl Task {
     /// Create a task from a continuation
-    fn new<F>(f: F, stack_size: usize, id: TaskId, name: Option<String>, clock: VectorClock) -> Self
+    fn new<F>(f: F, stack_size: usize, id: TaskId, name: Option<String>, clock: VectorClock, tag: i64) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
@@ -83,14 +86,22 @@ impl Task {
             park_state: ParkState::Unavailable,
             name,
             local_storage: StorageMap::new(),
+            tag,
         }
     }
 
-    pub(crate) fn from_closure<F>(f: F, stack_size: usize, id: TaskId, name: Option<String>, clock: VectorClock) -> Self
+    pub(crate) fn from_closure<F>(
+        f: F,
+        stack_size: usize,
+        id: TaskId,
+        name: Option<String>,
+        clock: VectorClock,
+        tag: i64,
+    ) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
-        Self::new(f, stack_size, id, name, clock)
+        Self::new(f, stack_size, id, name, clock, tag)
     }
 
     pub(crate) fn from_future<F>(
@@ -99,6 +110,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
+        tag: i64,
     ) -> Self
     where
         F: Future<Output = ()> + Send + 'static,
@@ -117,6 +129,7 @@ impl Task {
             id,
             name,
             clock,
+            tag,
         )
     }
 
@@ -270,6 +283,14 @@ impl Task {
             assert!(self.blocked());
             self.unblock();
         }
+    }
+
+    pub(crate) fn get_tag(&self) -> i64 {
+        self.tag
+    }
+
+    pub(crate) fn set_tag(&mut self, tag: i64) {
+        self.tag = tag;
     }
 }
 

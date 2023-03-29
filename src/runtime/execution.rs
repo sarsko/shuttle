@@ -285,9 +285,10 @@ impl ExecutionState {
     {
         Self::with(|state| {
             let task_id = TaskId(state.tasks.len());
+            let tag = state.get_tag_internal();
             let clock = state.increment_clock_mut(); // Increment the parent's clock
             clock.extend(task_id); // and extend it with an entry for the new task
-            let task = Task::from_future(future, stack_size, task_id, name, clock.clone());
+            let task = Task::from_future(future, stack_size, task_id, name, clock.clone(), tag);
             state.tasks.push(task);
             task_id
         })
@@ -304,6 +305,7 @@ impl ExecutionState {
     {
         Self::with(|state| {
             let task_id = TaskId(state.tasks.len());
+            let tag = state.get_tag_internal();
             let clock = if let Some(ref mut clock) = initial_clock {
                 clock
             } else {
@@ -311,7 +313,7 @@ impl ExecutionState {
                 state.increment_clock_mut()
             };
             clock.extend(task_id); // and extend it with an entry for the new thread
-            let task = Task::from_closure(f, stack_size, task_id, name, clock.clone());
+            let task = Task::from_closure(f, stack_size, task_id, name, clock.clone(), tag);
             state.tasks.push(task);
             task_id
         })
@@ -567,6 +569,35 @@ impl ExecutionState {
             self.current_span = span!(Level::INFO, "step", i = self.current_schedule.len() - 1, task = tid.0);
             self.current_span_entered = Some(unsafe { extend_span_entered_lt(self.current_span.enter()) });
         }
+    }
+
+    fn set_tag_internal(&mut self, tag: i64) {
+        self.current_mut().set_tag(tag);
+    }
+
+    pub(crate) fn set_tag(tag: i64) {
+        ExecutionState::with(|s| {
+            s.set_tag_internal(tag);
+        });
+    }
+
+    fn get_tag_internal(&self) -> i64 {
+        match self.try_current() {
+            Some(current) => current.get_tag(),
+            None => 0,
+        }
+    }
+
+    pub(crate) fn get_tag() -> i64 {
+        ExecutionState::with(|s| s.get_tag_internal())
+    }
+
+    pub(crate) fn step_cnt() -> usize {
+        ExecutionState::with(|s| s.current_schedule.len())
+    }
+
+    pub(crate) fn current_task_as_string() -> String {
+        format!("{:?}", ExecutionState::me())
     }
 }
 
