@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::runtime::task::TaskId;
 use crate::scheduler::{Schedule, Scheduler};
 use tracing::info;
@@ -24,6 +26,8 @@ pub(crate) struct MetricsScheduler<S: ?Sized + Scheduler> {
 
     random_choices: usize,
     random_choices_metric: CountSummaryMetric,
+
+    task_id_to_span: HashMap<TaskId, tracing::Span>,
 }
 
 impl<S: Scheduler> MetricsScheduler<S> {
@@ -46,6 +50,8 @@ impl<S: Scheduler> MetricsScheduler<S> {
 
             random_choices: 0,
             random_choices_metric: CountSummaryMetric::new(),
+
+            task_id_to_span: HashMap::new(),
         }
     }
 }
@@ -80,6 +86,7 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         }
         self.iterations += 1;
 
+        self.task_id_to_span = HashMap::new();
         self.inner.new_execution()
     }
 
@@ -92,12 +99,30 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         let choice = self.inner.next_task(runnable_tasks, current_task, is_yielding)?;
 
         self.steps += 1;
+
         if choice != self.last_task {
+            let span = tracing::Span::current();
+            if let Some(span_id) = span.id() {
+                self.task_id_to_span.insert(self.last_task, span);
+                tracing::dispatcher::get_default(|subscriber| {
+                    subscriber.exit(&span_id);
+                });
+            }
+
+            if let Some(span) = self.task_id_to_span.get(&choice) {
+                if let Some(span_id) = span.id() {
+                    tracing::dispatcher::get_default(|subscriber| {
+                        subscriber.enter(&span_id);
+                    });
+                }
+            }
+
             self.context_switches += 1;
             if runnable_tasks.contains(&self.last_task) {
                 self.preemptions += 1;
             }
         }
+
         self.last_task = choice;
 
         Some(choice)
