@@ -92,12 +92,14 @@ impl<S: Scheduler> Scheduler for MetricsScheduler<S> {
         let choice = self.inner.next_task(runnable_tasks, current_task, is_yielding)?;
 
         self.steps += 1;
+
         if choice != self.last_task {
             self.context_switches += 1;
             if runnable_tasks.contains(&self.last_task) {
                 self.preemptions += 1;
             }
         }
+
         self.last_task = choice;
 
         Some(choice)
