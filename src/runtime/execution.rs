@@ -44,6 +44,8 @@ impl Execution {
     }
 }
 
+use tracing::{span, Level};
+
 impl Execution {
     /// Run a function to be tested, taking control of scheduling it and any tasks it might spawn.
     /// This function runs until `f` and all tasks spawned by `f` have terminated, or until the
@@ -70,7 +72,9 @@ impl Execution {
             );
 
             // Run the test to completion
-            while self.step(config) {}
+            //while self.step(config) {}
+
+            span!(Level::INFO, "KAP").in_scope(move || while self.step(config) {});
 
             // Cleanup the state before it goes out of `EXECUTION_STATE` scope
             ExecutionState::cleanup();
@@ -306,14 +310,18 @@ impl ExecutionState {
             };
             clock.extend(task_id); // and extend it with an entry for the new thread
             let clock = clock.clone();
-            let sp = tracing::Span::none();
+            let mut sp = tracing::Span::none();
+            if true || name == Some("main-thread".to_string()) {
+                println!("Current: {:?}", tracing::Span::current());
+                sp = tracing::Span::current();
+            }
             let span = if state.try_current().is_some() {
                 state.get_current_span()
             } else {
                 &sp
             };
-            println!("SPAN: {span:?}");
 
+            //let task = Task::from_closure(f, stack_size, task_id, name, clock, &span);
             let task = Task::from_closure(f, stack_size, task_id, name, clock, &span);
             state.tasks.push(task);
             task_id
@@ -563,20 +571,23 @@ impl ExecutionState {
         debug_assert_ne!(self.next_task, ScheduledTask::None);
         let previous_task = self.current_task;
         self.current_task = self.next_task.take();
-        if let ScheduledTask::Some(tid) = self.current_task {
-            self.current_schedule.push_task(tid);
-            tracing::dispatcher::get_default(|subscriber| {
-                if let ScheduledTask::Some(previous) = previous_task {
-                    if let Some(span_id) = self.get(previous).span.id() {
-                        subscriber.exit(&span_id)
-                    }
-                }
 
+        tracing::dispatcher::get_default(|subscriber| {
+            if let ScheduledTask::Some(previous) = previous_task {
+                if let Some(span_id) = self.get(previous).span.id() {
+                    println!("EXITING: {:?}", self.get(previous).span);
+                    subscriber.exit(&span_id)
+                }
+            }
+
+            if let ScheduledTask::Some(tid) = self.current_task {
                 if let Some(span_id) = self.get(tid).span.id() {
+                    println!("ENTERING: {:?}", self.get(tid).span);
                     subscriber.enter(&span_id);
                 }
-            });
-        }
+                self.current_schedule.push_task(tid);
+            }
+        });
     }
 }
 

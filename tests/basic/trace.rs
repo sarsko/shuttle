@@ -8,7 +8,7 @@ fn tracing_nested_spans() {
     check_random(
         || {
             let lock = Arc::new(Mutex::new(0));
-            let threads: Vec<_> = (0..2)
+            let threads: Vec<_> = (0..3)
                 .map(|i| {
                     let lock = lock.clone();
                     thread::spawn(move || {

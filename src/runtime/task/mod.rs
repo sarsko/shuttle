@@ -79,6 +79,26 @@ impl Task {
         continuation.initialize(Box::new(f));
         let waker = make_waker(id);
         let continuation = Rc::new(RefCell::new(continuation));
+        /*
+        let span = match parent_span.id() {
+            Some(id) if id == tracing::Id::from_u64(1) =>
+            {
+                println!("Cloning span: {parent_span:?}");
+                parent_span.clone()
+            }
+            _ => tracing::info_span!(parent: parent_span.id(), "MIIP")
+            //span: tracing::Span::none(),
+            //span: parent_span.clone(),
+        };
+        */
+
+        let span = if name == Some("main-thread".to_string()) {
+            println!("Cloning span: {parent_span:?}");
+            parent_span.clone()
+        } else {
+            tracing::info_span!(parent: parent_span.id(), "MIIP")
+        };
+
         Self {
             id,
             state: TaskState::Runnable,
@@ -90,8 +110,8 @@ impl Task {
             detached: false,
             park_state: ParkState::Unavailable,
             name,
+            span,
             local_storage: StorageMap::new(),
-            span: tracing::info_span!(parent: parent_span.id(), "KLINKO"),
         }
     }
 
