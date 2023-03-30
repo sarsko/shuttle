@@ -18,4 +18,5 @@ mod rwlock;
 mod shrink;
 mod thread;
 mod timeout;
+mod trace;
 mod uncontrolled_nondeterminism;

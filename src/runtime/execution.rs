@@ -10,7 +10,6 @@ use scoped_tls::scoped_thread_local;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::future::Future;
 use std::panic;
 use std::rc::Rc;
@@ -192,8 +191,6 @@ pub(crate) struct ExecutionState {
     scheduler: Rc<RefCell<dyn Scheduler>>,
     current_schedule: Schedule,
 
-    task_id_to_span: HashMap<TaskId, tracing::Span>,
-
     #[cfg(debug_assertions)]
     has_cleaned_up: bool,
 }
@@ -231,7 +228,6 @@ impl ExecutionState {
             storage: StorageMap::new(),
             scheduler,
             current_schedule: initial_schedule,
-            task_id_to_span: HashMap::new(),
             #[cfg(debug_assertions)]
             has_cleaned_up: false,
         }
@@ -283,9 +279,11 @@ impl ExecutionState {
             let task_id = TaskId(state.tasks.len());
             let clock = state.increment_clock_mut(); // Increment the parent's clock
             clock.extend(task_id); // and extend it with an entry for the new task
-            let task = Task::from_future(future, stack_size, task_id, name, clock.clone());
+            let span = tracing::Span::none(); // TODO
+            let task = Task::from_future(future, stack_size, task_id, name, clock.clone(), &span);
             state.tasks.push(task);
-            task_id
+            //task_id
+            todo!();
         })
     }
 
@@ -307,7 +305,16 @@ impl ExecutionState {
                 state.increment_clock_mut()
             };
             clock.extend(task_id); // and extend it with an entry for the new thread
-            let task = Task::from_closure(f, stack_size, task_id, name, clock.clone());
+            let clock = clock.clone();
+            let sp = tracing::Span::none();
+            let span = if state.try_current().is_some() {
+                state.get_current_span()
+            } else {
+                &sp
+            };
+            println!("SPAN: {span:?}");
+
+            let task = Task::from_closure(f, stack_size, task_id, name, clock, &span);
             state.tasks.push(task);
             task_id
         })
@@ -485,6 +492,12 @@ impl ExecutionState {
         &mut task.clock
     }
 
+    /// TODO
+    pub(crate) fn get_current_span(&self) -> &tracing::Span {
+        let task = self.current();
+        &task.span
+    }
+
     /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
     /// scheduler is being invoked from within a running task. If scheduling fails, returns an Err
     /// with a String describing the failure.
@@ -552,23 +565,17 @@ impl ExecutionState {
         self.current_task = self.next_task.take();
         if let ScheduledTask::Some(tid) = self.current_task {
             self.current_schedule.push_task(tid);
-            let span = tracing::Span::current();
-            if let Some(span_id) = span.id() {
+            tracing::dispatcher::get_default(|subscriber| {
                 if let ScheduledTask::Some(previous) = previous_task {
-                    self.task_id_to_span.insert(previous, span);
-                    tracing::dispatcher::get_default(|subscriber| {
-                        subscriber.exit(&span_id);
-                    });
+                    if let Some(span_id) = self.get(previous).span.id() {
+                        subscriber.exit(&span_id)
+                    }
                 }
-            }
 
-            if let Some(span) = self.task_id_to_span.get(&tid) {
-                if let Some(span_id) = span.id() {
-                    tracing::dispatcher::get_default(|subscriber| {
-                        subscriber.enter(&span_id);
-                    });
+                if let Some(span_id) = self.get(tid).span.id() {
+                    subscriber.enter(&span_id);
                 }
-            }
+            });
         }
     }
 }
