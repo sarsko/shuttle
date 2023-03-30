@@ -70,6 +70,7 @@ impl Task {
         name: Option<String>,
         clock: VectorClock,
         parent_span: &tracing::Span,
+        schedule_len: usize,
     ) -> Self
     where
         F: FnOnce() + Send + 'static,
@@ -79,24 +80,11 @@ impl Task {
         continuation.initialize(Box::new(f));
         let waker = make_waker(id);
         let continuation = Rc::new(RefCell::new(continuation));
-        /*
-        let span = match parent_span.id() {
-            Some(id) if id == tracing::Id::from_u64(1) =>
-            {
-                println!("Cloning span: {parent_span:?}");
-                parent_span.clone()
-            }
-            _ => tracing::info_span!(parent: parent_span.id(), "MIIP")
-            //span: tracing::Span::none(),
-            //span: parent_span.clone(),
-        };
-        */
 
         let span = if name == Some("main-thread".to_string()) {
-            println!("Cloning span: {parent_span:?}");
             parent_span.clone()
         } else {
-            tracing::info_span!(parent: parent_span.id(), "MIIP")
+            tracing::info_span!(parent: parent_span.id(), "step", i = schedule_len, task = id.0)
         };
 
         Self {
@@ -122,11 +110,12 @@ impl Task {
         name: Option<String>,
         clock: VectorClock,
         parent_span: &tracing::Span,
+        schedule_len: usize,
     ) -> Self
     where
         F: FnOnce() + Send + 'static,
     {
-        Self::new(f, stack_size, id, name, clock, parent_span)
+        Self::new(f, stack_size, id, name, clock, parent_span, schedule_len)
     }
 
     pub(crate) fn from_future<F>(
@@ -141,6 +130,8 @@ impl Task {
         F: Future<Output = ()> + Send + 'static,
     {
         let mut future = Box::pin(future);
+        let schedule_len = ExecutionState::with(|s| s.current_schedule.len());
+
         Self::new(
             move || {
                 let waker = ExecutionState::with(|state| state.current_mut().waker());
@@ -155,6 +146,7 @@ impl Task {
             name,
             clock,
             parent_span,
+            schedule_len,
         )
     }
 
