@@ -44,8 +44,6 @@ impl Execution {
     }
 }
 
-//use tracing::{span, Level};
-
 impl Execution {
     /// Run a function to be tested, taking control of scheduling it and any tasks it might spawn.
     /// This function runs until `f` and all tasks spawned by `f` have terminated, or until the
@@ -73,8 +71,6 @@ impl Execution {
 
             // Run the test to completion
             while self.step(config) {}
-
-            //span!(Level::INFO, "KAP").in_scope(move || while self.step(config) {});
 
             // Cleanup the state before it goes out of `EXECUTION_STATE` scope
             ExecutionState::cleanup();

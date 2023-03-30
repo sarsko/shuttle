@@ -130,7 +130,7 @@ impl Task {
         F: Future<Output = ()> + Send + 'static,
     {
         let mut future = Box::pin(future);
-        let schedule_len = ExecutionState::with(|s| s.current_schedule.len());
+        let schedule_len = ExecutionState::with(|state| state.current_schedule.len());
 
         Self::new(
             move || {
