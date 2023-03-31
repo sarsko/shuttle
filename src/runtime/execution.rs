@@ -306,18 +306,21 @@ impl ExecutionState {
             };
             clock.extend(task_id); // and extend it with an entry for the new thread
             let clock = clock.clone();
-            let mut sp = tracing::Span::none();
-            if true || name == Some("main-thread".to_string()) {
-                sp = tracing::Span::current();
-            }
-            let span = if state.try_current().is_some() {
-                state.get_current_span()
+
+            // TODO: Check if we can always bind `span` to `current()` and then do the test / merge the two tests.
+            let span = if name == Some("main-thread".to_string()) {
+                tracing::Span::current()
             } else {
-                &sp
+                tracing::Span::none()
             };
+            let span = if state.try_current().is_some() {
+                &state.current().span
+            } else {
+                &span
+            };
+
             let schedule_len = state.current_schedule.len();
 
-            //let task = Task::from_closure(f, stack_size, task_id, name, clock, &span);
             let task = Task::from_closure(f, stack_size, task_id, name, clock, &span, schedule_len);
             state.tasks.push(task);
             task_id
@@ -497,10 +500,7 @@ impl ExecutionState {
     }
 
     /// TODO
-    pub(crate) fn get_current_span(&self) -> &tracing::Span {
-        let task = self.current();
-        &task.span
-    }
+    pub(crate) fn get_current_span(&self) -> &tracing::Span {}
 
     /// Run the scheduler to choose the next task to run. `has_yielded` should be false if the
     /// scheduler is being invoked from within a running task. If scheduling fails, returns an Err
@@ -568,8 +568,6 @@ impl ExecutionState {
         let previous_task = self.current_task;
         self.current_task = self.next_task.take();
 
-        //self.current_span = span!(Level::INFO, "step", i = self.current_schedule.len() - 1, task = tid.0);
-
         tracing::dispatcher::get_default(|subscriber| {
             if let ScheduledTask::Some(previous) = previous_task {
                 if let Some(span_id) = self.get(previous).span.id() {
@@ -578,11 +576,8 @@ impl ExecutionState {
             }
 
             if let ScheduledTask::Some(tid) = self.current_task {
-                // trace!(Level::INFO, "step", i = self.current_schedule.len() - 1, task = tid.0);
-                //tracing::span!(Level::INFO, "step", i = self.current_schedule.len() - 1, task = tid.0);
                 if let Some(span_id) = self.get(tid).span.id() {
                     subscriber.enter(&span_id);
-                    //tracing::info!("step {} {}", i = self.current_schedule.len() - 1, task = tid.0).enter();
                 }
                 self.current_schedule.push_task(tid);
             }

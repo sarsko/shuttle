@@ -53,7 +53,6 @@ impl<S: Scheduler + 'static> Runner<S> {
 
             let mut i = 0;
 
-            //let mut _span = tracing::info_span!(parent: None, "WOOF", message = i).entered();
             loop {
                 if self.config.max_time.map(|t| start.elapsed() > t).unwrap_or(false) {
                     break;
@@ -67,7 +66,7 @@ impl<S: Scheduler + 'static> Runner<S> {
                 let execution = Execution::new(self.scheduler.clone(), schedule);
                 let f = Arc::clone(&f);
 
-                span!(Level::INFO, "Execution", i).in_scope(|| execution.run(&self.config, move || f()));
+                span!(Level::INFO, "execution", i).in_scope(|| execution.run(&self.config, move || f()));
 
                 i += 1;
             }
