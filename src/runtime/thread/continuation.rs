@@ -254,12 +254,16 @@ impl std::fmt::Debug for PooledContinuation {
 // Safety: these aren't sent across real threads
 unsafe impl Send for PooledContinuation {}
 
+use crate::prntln;
 /// Possibly yield back to the executor to perform a context switch.
 pub(crate) fn switch() {
+    prntln!(true, "SWTICH -- Maybe yield");
     if ExecutionState::maybe_yield() {
+        prntln!(true, "SWTICH -- Yielding");
         let r = generator::yield_(ContinuationOutput::Yielded).unwrap();
         assert!(matches!(r, ContinuationInput::Resume));
     }
+    prntln!(true, "SWTICH -- Returning");
 }
 
 #[cfg(test)]

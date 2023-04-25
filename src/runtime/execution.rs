@@ -223,6 +223,8 @@ impl ScheduledTask {
     }
 }
 
+use crate::prntln;
+
 impl ExecutionState {
     fn new(config: Config, scheduler: Rc<RefCell<dyn Scheduler>>, initial_schedule: Schedule) -> Self {
         Self {
@@ -357,13 +359,16 @@ impl ExecutionState {
     /// is different from the currently running task, indicating that the current task should yield
     /// its execution.
     pub(crate) fn maybe_yield() -> bool {
+        prntln!(true, "MAYBE YIELD -- Entry");
         Self::with(|state| {
             debug_assert!(
                 matches!(state.current_task, ScheduledTask::Some(_)) && state.next_task == ScheduledTask::None,
                 "we're inside a task and scheduler should not yet have run"
             );
 
+            println!("{}MAYBE YIELD -- Schedule current: {:?} next: {:?}", state.task_info(), state.current_task, state.next_task);
             let result = state.schedule();
+            println!("{}MAYBE YIELD -- Schedule after: {result:?} current: {:?} next: {:?}", state.task_info(), state.current_task, state.next_task);
             // If scheduling failed, yield so that the outer scheduling loop can handle it.
             if result.is_err() {
                 return true;
@@ -372,9 +377,12 @@ impl ExecutionState {
             // If the next task is the same as the current one, we can skip the context switch
             // and just advance to the next task immediately.
             if state.current_task == state.next_task {
+                println!("{}MAYBE YIELD -- Current is next. Advancing. current: {:?} next: {:?}", state.task_info(), state.current_task, state.next_task);
                 state.advance_to_next_task();
+                println!("{}MAYBE YIELD -- Current is next. Advanced. current: {:?} next: {:?}", state.task_info(), state.current_task, state.next_task);
                 false
             } else {
+                println!("{}MAYBE YIELD -- Current is NOT next. current: {:?} next: {:?}", state.task_info(), state.current_task, state.next_task);
                 true
             }
         })
@@ -383,6 +391,7 @@ impl ExecutionState {
     /// Tell the scheduler that the next context switch is an explicit yield requested by the
     /// current task. Some schedulers use this as a hint to influence scheduling.
     pub(crate) fn request_yield() {
+        println!("REQUESTING YIELD");
         Self::with(|state| {
             state.has_yielded = true;
         });
@@ -591,6 +600,38 @@ impl ExecutionState {
 
     pub(crate) fn get_tag_for_current_task() -> Tag {
         ExecutionState::with(|s| s.get_tag_or_default_for_current_task())
+    }
+
+    /// B
+    pub fn task_info(&self) -> String {
+        let mut unfinished_attached = false;
+        let runnable = self
+            .tasks
+            .iter()
+            .inspect(|t| unfinished_attached = unfinished_attached || (!t.finished() && !t.detached))
+            .filter(|t| t.runnable())
+            .map(|t| t.id)
+            .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>();
+        format!(
+            "T: {:?} S: {} I: {:?} Runnable: {runnable:?} ",
+            self.get_tag_or_default_for_current_task(),
+            self.context_switches,
+            self.current().id
+        )
+    }
+
+    pub fn get_runnable() -> SmallVec<[TaskId; 16]> {
+        ExecutionState::with(|state| {
+        let mut unfinished_attached = false;
+        let runnable = state
+            .tasks
+            .iter()
+            .inspect(|t| unfinished_attached = unfinished_attached || (!t.finished() && !t.detached))
+            .filter(|t| t.runnable())
+            .map(|t| t.id)
+            .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>();
+        runnable
+    })
     }
 }
 

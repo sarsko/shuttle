@@ -65,7 +65,10 @@ impl<S: Scheduler + 'static> Runner<S> {
                 let execution = Execution::new(self.scheduler.clone(), schedule);
                 let f = Arc::clone(&f);
 
+
+                println!("--- START OF TEST ---");
                 span!(Level::INFO, "execution", i).in_scope(|| execution.run(&self.config, move || f()));
+                println!("\n\n");
 
                 i += 1;
             }

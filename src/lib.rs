@@ -308,6 +308,7 @@ where
 {
     use crate::scheduler::RandomScheduler;
 
+
     let scheduler = RandomScheduler::new(iterations);
     let runner = Runner::new(scheduler, Default::default());
     runner.run(f);

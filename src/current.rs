@@ -48,3 +48,61 @@ pub fn get_tag_for_current_task() -> Tag {
 pub fn get_current_task() -> TaskId {
     ExecutionState::me()
 }
+
+/// B
+pub fn get_runnable() -> smallvec::SmallVec<[TaskId; 16]> {
+    ExecutionState::get_runnable()
+}
+
+
+/// B
+pub fn task_info() -> String {
+    format!(
+        "T: {:?} S: {} I: {:?} Runnable: {:?} ",
+        get_tag_for_current_task(),
+        context_switches(),
+        get_current_task(),
+        get_runnable()
+    )
+}
+
+/// b
+#[macro_export]
+macro_rules! task_info {
+($($tts:tt)*) => {{
+    use $crate::current::task_info;
+    print!("{}", task_info());
+    print!($($tts)*);
+}};
+}
+
+/// b
+#[macro_export]
+macro_rules! prnt {
+($test:expr, $($tts:tt)*) => {{
+    use $crate::task_info;
+    if $test {
+        task_info!($($tts)*);
+    }
+}};
+}
+
+/// b
+#[macro_export]
+macro_rules! prntln {
+($test:expr, $($tts:tt)*) => {{
+    use $crate::prnt;
+    if $test {
+        prnt!($test,$($tts)*);
+        println!();
+    }
+}};
+}
+
+/// b
+#[macro_export]
+macro_rules! t {
+() => {
+    ExecutionState::get_tag_for_current_task()
+};
+}
