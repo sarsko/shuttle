@@ -71,6 +71,7 @@ impl<T> Future for JoinHandle<T> {
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         prntln!(true, "JH POLLING ==");
+        /*
         // Ok so it has to return Poll::Pending;
         // Hmm nevermind? It is stuck somewhere else than the loop
         loop {
@@ -90,8 +91,10 @@ impl<T> Future for JoinHandle<T> {
                 thread::switch(); // Added by me
             }
         }
-        /*
-        if let Some(result) = self.result.lock().unwrap().take() {
+        */
+        let lock = self.result.lock().unwrap().take();
+        if let Some(result) = lock {
+        //if let Some(result) = self.result.lock().unwrap().take() {
             prntln!(true, "JH POLLING == Ready");
             Poll::Ready(result)
         } else {
@@ -101,11 +104,12 @@ impl<T> Future for JoinHandle<T> {
                 let r = state.get_mut(self.task_id).set_waiter(me);
                 println!("JH POLLING == NOT Ready -- Setting waiter for: {:?}, waiter: {:?}", self.task_id, me);
                 assert!(r, "task shouldn't be finished if no result is present");
+                //state.current_mut().block();
             });
+            //_cx.waker().wake_by_ref(); // Oh hey this actually made less things fail
             //thread::switch(); // Added by me
             Poll::Pending
         }
-        */
     }
 }
 

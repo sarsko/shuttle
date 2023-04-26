@@ -38,6 +38,7 @@ unsafe fn raw_waker_wake(data: *const ()) {
             return;
         }
 
+        println!("RAW WAKER WAKE {task_id:?}");
         waiter.wake();
     });
 }

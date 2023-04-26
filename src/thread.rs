@@ -137,6 +137,7 @@ pub struct JoinHandle<T> {
 impl<T> JoinHandle<T> {
     /// Waits for the associated thread to finish.
     pub fn join(self) -> std::thread::Result<T> {
+        println!("== JOINING");
         ExecutionState::with(|state| {
             let me = state.current().id();
             let target = state.get_mut(self.task_id);

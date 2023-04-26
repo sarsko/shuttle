@@ -198,8 +198,10 @@ impl Task {
     /// Remember that our waker has been called, and so we should not block the next time the
     /// executor tries to put us to sleep.
     pub(super) fn wake(&mut self) {
+        println!("WAKE");
         self.woken = true;
         if self.state == TaskState::Sleeping {
+            println!("WAKE -- UNBLOCK");
             self.unblock();
         }
     }
