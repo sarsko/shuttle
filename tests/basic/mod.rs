@@ -20,3 +20,4 @@ mod tag;
 mod thread;
 mod timeout;
 mod uncontrolled_nondeterminism;
+mod tracing;

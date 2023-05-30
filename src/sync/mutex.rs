@@ -91,7 +91,7 @@ impl<T: ?Sized> Mutex<T> {
 
             // Update the vector clock stored in the Mutex with this threads clock.
             // Future threads that fail a `try_lock` have a causal dependency on this thread's acquire.
-            state.clock.update(s.get_clock(me));
+            state.clock.update(&ExecutionState::get_clock(me));
         });
 
         drop(state);
@@ -172,7 +172,7 @@ impl<T: ?Sized> Mutex<T> {
             // Update the vector clock stored in the Mutex with this threads clock.
             // Future threads that manage to acquire have a causal dependency on this thread's failed `try_lock`.
             // Future threads that fail a `try_lock` have a causal dependency on this thread's successful `try_lock`.
-            state.clock.update(s.get_clock(me));
+            state.clock.update(&ExecutionState::get_clock(me));
 
             // Update this thread's clock with the clock stored in the Mutex.
             // We need to do the vector clock update even in the failing case, because there's a causal

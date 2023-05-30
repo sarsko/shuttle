@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use std::any::Any;
 use std::cell::RefCell;
 use std::future::Future;
+use std::ops::Deref;
 use std::panic;
 use std::rc::Rc;
 use tracing::trace;
@@ -20,6 +21,96 @@ use tracing::trace;
 // need access to it (to spawn new tasks, interrogate task status, etc).
 scoped_thread_local! {
     static EXECUTION_STATE: RefCell<ExecutionState>
+}
+
+// TASKS has to be in a scoped TLS so that it is both accessible by the ExecutionState and by TaskId
+// which enables us to override debug in TaskId using the closure provided in the Config.
+// invariant: tasks are never removed from this list
+scoped_thread_local! {
+    static TASKS: RefCell<Tasks>
+}
+
+#[derive(Default)]
+pub(crate) struct Tasks {
+    tasks: SmallVec<[Task; DEFAULT_INLINE_TASKS]>,
+}
+
+impl Deref for Tasks {
+    type Target = SmallVec<[Task; DEFAULT_INLINE_TASKS]>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tasks
+    }
+}
+
+impl Tasks {
+    fn new() -> Self {
+        Self {
+            tasks: SmallVec::new()
+        }
+    }
+
+    /// Invoke a closure with access to the current Tasks.
+    #[inline]
+    pub(crate) fn with<F, T>(f: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        Self::try_with(f).expect("Shuttle internal error: cannot access ExecutionState. are you trying to access a Shuttle primitive from outside a Shuttle test?")
+    }
+
+    /// Like `with`, but returns None instead of panicing if there is no current Tasks or
+    /// if the current Tasks is already borrowed.
+    #[inline]
+    pub(crate) fn try_with<F, T>(f: F) -> Option<T>
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        if TASKS.is_set() {
+            TASKS.with(|cell| {
+                if let Ok(mut tasks) = cell.try_borrow_mut() {
+                    Some(f(&mut tasks))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn get_clock(&self, id: TaskId) -> &VectorClock {
+        &self.get(id.0).unwrap().clock
+    }
+
+    pub(crate) fn get_clock_mut(&mut self, id: TaskId) -> &mut VectorClock {
+        &mut self.tasks.get_mut(id.0).unwrap().clock
+    }
+
+    pub(crate) fn get_mut(&mut self, id: TaskId) -> &mut Task {
+        &mut self.tasks.get_mut(id.0).unwrap()
+    }
+
+    pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
+        self.get(id.0)
+    }
+
+    pub(crate) fn current(&self) -> &Task {
+        self.get(self.current_task.id().unwrap())
+    }
+
+    pub(crate) fn current_mut(&mut self) -> &mut Task {
+        self.get_mut(self.current_task.id().unwrap())
+    }
+
+    pub(crate) fn try_current(&self) -> Option<&Task> {
+        self.try_get(self.current_task.id()?)
+    }
+
+    pub(crate) fn get(&self, id: TaskId) -> &Task {
+        self.try_get(id).unwrap()
+    }
+
 }
 
 /// An `Execution` encapsulates a single run of a function under test against a chosen scheduler.
@@ -62,6 +153,7 @@ impl Execution {
         let _guard = init_panic_hook(config.clone());
 
         EXECUTION_STATE.set(&state, move || {
+            TASKS.set(&RefCell::new(Tasks::new()), move || {
             // Spawn `f` as the first task
             ExecutionState::spawn_thread(
                 move || thread_fn(f, Default::default()),
@@ -75,7 +167,7 @@ impl Execution {
 
             // Cleanup the state before it goes out of `EXECUTION_STATE` scope
             ExecutionState::cleanup();
-        });
+        })});
     }
 
     /// Execute a single step of the scheduler. Returns true if the execution should continue.
@@ -102,9 +194,8 @@ impl Execution {
                     // The scheduler decided we're finished, so there are either no runnable tasks,
                     // or all runnable tasks are detached and there are no unfinished attached
                     // tasks. Therefore, it's a deadlock if there are unfinished attached tasks.
-                    if state.tasks.iter().any(|t| !t.finished() && !t.detached) {
-                        let blocked_tasks = state
-                            .tasks
+                    if TASKS.with(|cell| cell.borrow().iter().any(|t| !t.finished() && !t.detached)) {
+                        let blocked_tasks = TASKS.with(|cell| cell.borrow()
                             .iter()
                             .filter(|t| !t.finished())
                             .map(|t| {
@@ -116,7 +207,7 @@ impl Execution {
                                     if t.sleeping() { ", pending future" } else { "" },
                                 )
                             })
-                            .collect::<Vec<_>>();
+                            .collect::<Vec<_>>());
                         NextStep::Failure(
                             format!("deadlock! blocked tasks: [{}]", blocked_tasks.join(", ")),
                             state.current_schedule.clone(),
@@ -175,8 +266,6 @@ impl Execution {
 /// tasks are pending spawn.
 pub(crate) struct ExecutionState {
     pub config: Config,
-    // invariant: tasks are never removed from this list
-    tasks: SmallVec<[Task; DEFAULT_INLINE_TASKS]>,
     // invariant: if this transitions to Stopped or Finished, it can never change again
     current_task: ScheduledTask,
     // the task the scheduler has chosen to run next
@@ -221,7 +310,6 @@ impl ExecutionState {
     fn new(config: Config, scheduler: Rc<RefCell<dyn Scheduler>>, initial_schedule: Schedule) -> Self {
         Self {
             config,
-            tasks: SmallVec::new(),
             current_task: ScheduledTask::None,
             next_task: ScheduledTask::None,
             has_yielded: false,
@@ -283,7 +371,7 @@ impl ExecutionState {
                 .try_current()
                 .map(|t| t.span.clone())
                 .unwrap_or_else(tracing::Span::current);
-            let task_id = TaskId(state.tasks.len());
+            let task_id = TaskId(TASKS.with(|cell| cell.borrow().len()));
             let tag = state.get_tag_or_default_for_current_task();
             let clock = state.increment_clock_mut(); // Increment the parent's clock
             clock.extend(task_id); // and extend it with an entry for the new task
@@ -299,7 +387,7 @@ impl ExecutionState {
                 tag,
             );
 
-            state.tasks.push(task);
+            TASKS.with(|cell| cell.borrow_mut().push(task));
             task_id
         })
     }
@@ -314,7 +402,7 @@ impl ExecutionState {
         F: FnOnce() + Send + 'static,
     {
         Self::with(|state| {
-            let task_id = TaskId(state.tasks.len());
+            let task_id = TaskId(TASKS.with(|cell| cell.borrow().len()));
             let tag = state.get_tag_or_default_for_current_task();
             let clock = if let Some(ref mut clock) = initial_clock {
                 clock
@@ -332,7 +420,8 @@ impl ExecutionState {
                 .map(|t| t.span.clone())
                 .unwrap_or_else(tracing::Span::current);
             let task = Task::from_closure(f, stack_size, task_id, name, clock, parent_span, schedule_len, tag);
-            state.tasks.push(task);
+
+            TASKS.with(|cell| cell.borrow_mut().push(task));
             task_id
         })
     }
@@ -346,7 +435,7 @@ impl ExecutionState {
         // invalid state, but no one should still be accessing the tasks anyway.
         let (mut tasks, final_state) = Self::with(|state| {
             assert!(state.current_task == ScheduledTask::Stopped || state.current_task == ScheduledTask::Finished);
-            (std::mem::replace(&mut state.tasks, SmallVec::new()), state.current_task)
+            TASKS.with(|cell| (cell.take(), state.current_task))
         });
 
         for task in tasks.drain(..) {
@@ -443,29 +532,6 @@ impl ExecutionState {
         })
     }
 
-    pub(crate) fn current(&self) -> &Task {
-        self.get(self.current_task.id().unwrap())
-    }
-
-    pub(crate) fn current_mut(&mut self) -> &mut Task {
-        self.get_mut(self.current_task.id().unwrap())
-    }
-    pub(crate) fn try_current(&self) -> Option<&Task> {
-        self.try_get(self.current_task.id()?)
-    }
-
-    pub(crate) fn get(&self, id: TaskId) -> &Task {
-        self.try_get(id).unwrap()
-    }
-
-    pub(crate) fn get_mut(&mut self, id: TaskId) -> &mut Task {
-        self.tasks.get_mut(id.0).unwrap()
-    }
-
-    pub(crate) fn try_get(&self, id: TaskId) -> Option<&Task> {
-        self.tasks.get(id.0)
-    }
-
     pub(crate) fn context_switches() -> usize {
         Self::with(|state| state.context_switches)
     }
@@ -480,13 +546,6 @@ impl ExecutionState {
         self.storage.init(key.into(), value);
     }
 
-    pub(crate) fn get_clock(&self, id: TaskId) -> &VectorClock {
-        &self.tasks.get(id.0).unwrap().clock
-    }
-
-    pub(crate) fn get_clock_mut(&mut self, id: TaskId) -> &mut VectorClock {
-        &mut self.tasks.get_mut(id.0).unwrap().clock
-    }
 
     /// Increment the current thread's clock entry and update its clock with the one provided.
     pub(crate) fn update_clock(&mut self, clock: &VectorClock) {
@@ -537,13 +596,12 @@ impl ExecutionState {
         }
 
         let mut unfinished_attached = false;
-        let mut runnable = self
-            .tasks
+        let mut runnable = TASKS.with(|cell| cell.borrow()
             .iter()
             .inspect(|t| unfinished_attached = unfinished_attached || (!t.finished() && !t.detached))
             .filter(|t| t.runnable())
             .map(|t| t.id)
-            .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>();
+            .collect::<SmallVec<[_; DEFAULT_INLINE_TASKS]>>());
 
         // We should finish execution when either
         // (1) There are no runnable tasks, or
@@ -560,7 +618,7 @@ impl ExecutionState {
         // they won't contribute to the check on `runnable.is_empty()` if the only runnable tasks
         // are ones that are waiting for a potential spurious wakeup, it should still be treated as
         // a deadlock since there's no guarantee that spurious wakeups will ever occur.
-        runnable.extend(self.tasks.iter().filter(|t| t.can_spuriously_wakeup()).map(|t| t.id));
+        TASKS.with(|cell| runnable.extend(cell.borrow().iter().filter(|t| t.can_spuriously_wakeup()).map(|t| t.id)));
 
         let is_yielding = std::mem::replace(&mut self.has_yielded, false);
 
@@ -629,6 +687,13 @@ impl ExecutionState {
     pub(crate) fn get_tag_for_current_task() -> Tag {
         ExecutionState::with(|s| s.get_tag_or_default_for_current_task())
     }
+
+    /*
+    pub(crate) fn task_id_to_string(&self, task_id: TaskId) -> String {
+        let tag = self.tasks[task_id.0].get_tag();
+        (self.config.task_id_and_tag_to_string)(task_id, tag)
+    }
+    */
 }
 
 #[cfg(debug_assertions)]

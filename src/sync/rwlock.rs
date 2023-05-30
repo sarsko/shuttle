@@ -257,7 +257,7 @@ impl<T: ?Sized> RwLock<T> {
         // the lock at the same time.
         ExecutionState::with(|s| {
             s.update_clock(&state.clock);
-            state.clock.update(s.get_clock(me));
+            state.clock.update(&ExecutionState::get_clock(me));
         });
 
         // Block all other waiters, since we won the race to take this lock
@@ -322,7 +322,7 @@ impl<T: ?Sized> RwLock<T> {
         // `try_read`s.
         ExecutionState::with(|s| {
             s.update_clock(&state.clock);
-            state.clock.update(s.get_clock(me));
+            state.clock.update(&ExecutionState::get_clock(me));
         });
 
         // Block all other waiters, since we won the race to take this lock

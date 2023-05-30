@@ -5,7 +5,7 @@
 //! example, a tool that wants to check linearizability might want access to a global timestamp for
 //! events, which the [`context_switches`] function provides.
 
-use crate::runtime::execution::ExecutionState;
+use crate::runtime::execution::{ExecutionState, Tasks};
 use crate::runtime::task::clock::VectorClock;
 pub use crate::runtime::task::{Tag, TaskId};
 
@@ -24,13 +24,17 @@ pub fn context_switches() -> usize {
 pub fn clock() -> VectorClock {
     ExecutionState::with(|state| {
         let me = state.current();
-        state.get_clock(me.id()).clone()
+        Tasks::with(|tasks| {
+            tasks.get_clock(me.id()).clone()
+        })
     })
 }
 
 /// Gets the clock for the thread with the given task ID
 pub fn clock_for(task_id: TaskId) -> VectorClock {
-    ExecutionState::with(|state| state.get_clock(task_id).clone())
+    Tasks::with(|tasks| {
+        tasks.get_clock(task_id).clone()
+    })
 }
 
 /// Sets the `tag` field of the current task.

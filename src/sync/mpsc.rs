@@ -1,6 +1,6 @@
 //! Multi-producer, single-consumer FIFO queue communication primitives.
 
-use crate::runtime::execution::ExecutionState;
+use crate::runtime::execution::{ExecutionState, Tasks};
 use crate::runtime::task::clock::VectorClock;
 use crate::runtime::task::{TaskId, DEFAULT_INLINE_TASKS};
 use crate::runtime::thread;
@@ -207,8 +207,10 @@ impl<T> Channel<T> {
                 // When a sender successfully sends on a rendezvous channel, it knows that the receiver will perform
                 // the matching receive, so we need to update the sender's clock with the receiver's.
                 if is_rendezvous {
-                    let recv_clock = s.get_clock(tid).clone();
-                    s.update_clock(&recv_clock);
+                    Tasks::with(|tasks| {
+                    let recv_clock = tasks.get_clock(tid).clone();
+                    tasks.update_clock(&recv_clock);
+                    });
                 }
             });
         } else {
@@ -339,7 +341,7 @@ impl<T> Channel<T> {
                 if bound > 0 {
                     // non-rendezvous
                     assert!(receiver_clock.len() < bound);
-                    receiver_clock.push(s.get_clock(me).clone());
+                    receiver_clock.push(ExecutionState::get_clock(me).clone());
                 }
             }
         });
