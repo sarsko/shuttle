@@ -1,10 +1,38 @@
-use crate::runtime::task::{TaskId, DEFAULT_INLINE_TASKS};
-use crate::scheduler::{Schedule, Scheduler};
-use smallvec::SmallVec;
+use std::io::Write;
+use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ScheduleRecord {
-    Task(Option<TaskId>, SmallVec<[TaskId; DEFAULT_INLINE_TASKS]>, bool),
+use crate::runtime::task::TaskId;
+use crate::scheduler::{Schedule, Scheduler};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NextTaskRecord {
+    runnable_tasks: Vec<TaskId>,
+    // Logging this is not needed if invariants are maintained elsewhere, but might as well in case they are not maintained.
+    current_task: Option<TaskId>,
+    is_yielding: bool,
+    returned_task_id: Option<TaskId>,
+}
+
+impl NextTaskRecord {
+    pub fn new(
+        runnable_tasks: Vec<TaskId>,
+        current_task: Option<TaskId>,
+        is_yielding: bool,
+        returned_task_id: Option<TaskId>,
+    ) -> Self {
+        Self {
+            runnable_tasks,
+            current_task,
+            is_yielding,
+            returned_task_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScheduleRecord {
+    Task(NextTaskRecord),
     Random(u64),
 }
 
@@ -43,7 +71,7 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
         if !self.recording {
             // Start a new recording
             if self.current_step != self.previous_schedule.len() {
-                panic!("possible nondeterminism: current execution ended earlier than expected (expected length {} but ended after {})", self.previous_schedule.len(), self.current_step);
+                panic!("replay unsuccessful: current execution ended earlier than expected (expected length {} but ended after {})", self.previous_schedule.len(), self.current_step);
             }
 
             self.previous_schedule.clear();
@@ -64,35 +92,38 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
     ) -> Option<TaskId> {
         if self.recording {
             let choice = self.scheduler.next_task(runnable_tasks, current_task, is_yielding);
-            self.previous_schedule
-                .push(ScheduleRecord::Task(choice, runnable_tasks.into(), is_yielding));
+            self.previous_schedule.push(ScheduleRecord::Task(NextTaskRecord::new(
+                Vec::from(runnable_tasks),
+                current_task,
+                is_yielding,
+                choice,
+            )));
 
             choice
         } else {
             if self.current_step >= self.previous_schedule.len() {
                 panic!(
-                    "possible nondeterminism: current execution should have ended after {} steps, whereas current step count is {}",
+                    "replay unsuccessful: current execution should have ended after {} steps, whereas current step count is {}",
                     self.previous_schedule.len(),
                     self.current_step
                 );
             }
 
             match &self.previous_schedule[self.current_step] {
-                ScheduleRecord::Task(maybe_id, runnables, was_yielding) => {
-                    if runnables.as_slice() != runnable_tasks {
-                        panic!("possible nondeterminism: set of runnable tasks is different than expected (expected {runnables:?} but got {runnable_tasks:?})");
+                ScheduleRecord::Task(next_task_record) => {
+                    if next_task_record.runnable_tasks.as_slice() != runnable_tasks {
+                        panic!("replay unsuccessful: set of runnable tasks is different than expected (expected {:?} but got {runnable_tasks:?})", next_task_record.runnable_tasks);
                     }
 
-                    if *was_yielding != is_yielding {
-                        panic!("possible nondeterminism: `next_task` was called with `is_yielding` equal to {was_yielding} in the original execution, and {is_yielding} in the current execution");
+                    if next_task_record.is_yielding != is_yielding {
+                        panic!("replay unsuccessful: `next_task` was called with `is_yielding` equal to {} in the original execution, and {is_yielding} in the current execution", next_task_record.is_yielding);
                     }
 
                     self.current_step += 1;
-
-                    *maybe_id
+                    next_task_record.returned_task_id
                 }
                 ScheduleRecord::Random(_) => {
-                    panic!("possible nondeterminism: next step was context switch, but recording expected random number generation")
+                    panic!("replay unsuccessful: next step was context switch, but recording expected random number generation")
                 }
             }
         }
@@ -107,19 +138,359 @@ impl<S: Scheduler> Scheduler for UncontrolledNondeterminismCheckScheduler<S> {
         } else {
             if self.current_step >= self.previous_schedule.len() {
                 panic!(
-                    "possible nondeterminism: current execution should have ended after {} steps, whereas current step count is {}",
+                    "replay unsuccessful: current execution should have ended after {} steps, whereas current step count is {}",
                     self.previous_schedule.len(),
                     self.current_step
                 );
             }
 
             match self.previous_schedule[self.current_step] {
-                ScheduleRecord::Task(..) => panic!("possible nondeterminism: next step was random number generation, but recording expected context switch"),
+                ScheduleRecord::Task(..) => panic!("replay unsuccessful: next step was random number generation, but recording expected context switch"),
                 ScheduleRecord::Random(num) => {
                     self.current_step += 1;
                     num
                 }
             }
         }
+    }
+}
+
+// This doesn't belong here, but whatever
+
+/// Scheduler which simply populates a `Vec<ScheduleRecord>` for a given inner scheduler
+#[derive(Debug)]
+pub struct RecordingScheduler<S: Scheduler> {
+    scheduler: Box<S>,
+    current_schedule: Vec<ScheduleRecord>,
+    recorded_schedules: Vec<Vec<ScheduleRecord>>,
+    writing_config: Option<WritingConfig>,
+}
+
+#[derive(Debug)]
+pub struct WritingConfig {
+    // Whether to prettyprint the recorded schedules
+    // TODO: Actually enable prittyprinting
+    #[allow(unused)]
+    pub pretty: bool,
+    // TODO: Move this into an `impl Writer`
+    pub file_name: Box<&'static Path>,
+}
+
+impl WritingConfig {
+    #[allow(unused)]
+    pub fn new(path: &'static Path) -> Self {
+        Self {
+            pretty: false,
+            file_name: Box::new(path),
+        }
+    }
+}
+
+impl Default for WritingConfig {
+    fn default() -> Self {
+        Self {
+            pretty: false,
+            file_name: Box::new(Path::new("schedule")),
+        }
+    }
+}
+
+impl<S: Scheduler> RecordingScheduler<S> {
+    /// Wraps a scheduler and records the scheduling decisions / random numbers generated, in addition to `runnable_tasks` and `is_yielding`.
+    #[allow(unused)]
+    pub fn new(scheduler: S, writing_config: Option<WritingConfig>) -> Self {
+        Self {
+            scheduler: Box::new(scheduler),
+            current_schedule: Vec::new(),
+            recorded_schedules: Vec::new(),
+            writing_config,
+        }
+    }
+}
+
+fn serialize_to_file(to_be_serialized: &impl Serialize, file_path: &Path) {
+    let mut file =
+        std::fs::File::create(file_path).unwrap_or_else(|_| panic!("Failed to create file with path: {file_path:?}"));
+    file.write_all(serde_json::to_string(&to_be_serialized).unwrap().as_bytes())
+        .expect("Failed to write JSON data to file");
+}
+
+fn deserialize_from_file<T: serde::de::DeserializeOwned>(file_path: &Path) -> T {
+    let as_string =
+        std::fs::read_to_string(file_path).unwrap_or_else(|_| panic!("Unable to read file with path: {file_path:?}"));
+    serde_json::from_str(&as_string).unwrap_or_else(|_| {
+        panic!(
+            "Unable to convert the read contents to type: {}.\nRead the following contents: {as_string}",
+            std::any::type_name::<T>()
+        )
+    })
+}
+
+impl<S: Scheduler> Scheduler for RecordingScheduler<S> {
+    fn new_execution(&mut self) -> Option<Schedule> {
+        if !self.current_schedule.is_empty() {
+            self.recorded_schedules.push(std::mem::take(&mut self.current_schedule));
+        }
+
+        let out = self.scheduler.new_execution();
+
+        if out.is_none() {
+            match self.writing_config.as_ref() {
+                Some(writing_config) => serialize_to_file(&self.recorded_schedules, *writing_config.file_name),
+                None => {}
+            }
+        }
+
+        out
+    }
+
+    fn next_task(
+        &mut self,
+        runnable_tasks: &[TaskId],
+        current_task: Option<TaskId>,
+        is_yielding: bool,
+    ) -> Option<TaskId> {
+        let choice = self.scheduler.next_task(runnable_tasks, current_task, is_yielding);
+        self.current_schedule.push(ScheduleRecord::Task(NextTaskRecord::new(
+            Vec::from(runnable_tasks),
+            current_task,
+            is_yielding,
+            choice,
+        )));
+
+        choice
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let next = self.scheduler.next_u64();
+        self.current_schedule.push(ScheduleRecord::Random(next));
+
+        next
+    }
+}
+
+#[derive(Debug)]
+pub struct CheckReplayScheduler {
+    schedules: Vec<Vec<ScheduleRecord>>,
+    current_schedule_idx: usize,
+    current_step: usize,
+}
+
+impl CheckReplayScheduler {
+    /// DOC
+    pub fn new(schedules: Vec<Vec<ScheduleRecord>>) -> Self {
+        Self {
+            schedules,
+            current_schedule_idx: 0,
+            current_step: 0,
+        }
+    }
+
+    /// DOC
+    #[allow(unused)]
+    pub fn new_from_file(file_path: &Path) -> Self {
+        let schedules: Vec<Vec<_>> = deserialize_from_file(file_path);
+        Self::new(schedules)
+    }
+}
+
+impl Scheduler for CheckReplayScheduler {
+    fn new_execution(&mut self) -> Option<Schedule> {
+        // TODO: This might be wrong.
+        if self.current_step > 0 {
+            None
+        } else {
+            Some(Schedule::new(0))
+        }
+    }
+
+    fn next_task(
+        &mut self,
+        runnable_tasks: &[TaskId],
+        current_task: Option<TaskId>,
+        is_yielding: bool,
+    ) -> Option<TaskId> {
+        match &self.schedules[self.current_schedule_idx][self.current_step] {
+            ScheduleRecord::Task(next_task_record) => {
+                if current_task != next_task_record.current_task {
+                    panic!("replay unsuccessful: different current tasks. This should not happen, and suggest an invariant breakage elsewhere. Current task: {current_task:?}, in the replay: {:?}", next_task_record.current_task);
+                }
+
+                if next_task_record.runnable_tasks.as_slice() != runnable_tasks {
+                    panic!("replay unsuccessful: set of runnable tasks is different than expected (expected {:?} but got {runnable_tasks:?})", next_task_record.runnable_tasks);
+                }
+
+                if next_task_record.is_yielding != is_yielding {
+                    panic!("replay unsuccessful: `next_task` was called with `is_yielding` equal to {} in the original execution, and {is_yielding} in the current execution", next_task_record.is_yielding);
+                }
+
+                self.current_step += 1;
+                next_task_record.returned_task_id
+            }
+            ScheduleRecord::Random(_) => {
+                panic!("replay unsuccessful: next step was context switch, but recording expected random number generation")
+            }
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let len = self.schedules[self.current_schedule_idx].len();
+        if self.current_step >= len {
+            panic!(
+                "replay unsuccessful: current execution should have ended after {} steps, whereas current step count is {}",
+                len,
+                self.current_step
+            );
+        }
+
+        match &self.schedules[self.current_schedule_idx][self.current_step] {
+            ScheduleRecord::Task(..) => panic!(
+                "replay unsuccessful: next step was random number generation, but recording expected context switch"
+            ),
+            ScheduleRecord::Random(num) => {
+                self.current_step += 1;
+                *num
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rand::Rng;
+    use std::{path::Path, sync::Arc};
+
+    use crate::{
+        scheduler::{
+            uncontrolled_nondeterminism::{CheckReplayScheduler, RecordingScheduler, WritingConfig},
+            RandomScheduler, Scheduler,
+        },
+        sync::Mutex,
+        thread, Config, Runner,
+    };
+
+    fn record_schedules<F, S>(f: F, scheduler: S, serialize_to: &'static Path)
+    where
+        F: Fn() + Send + Sync + 'static,
+        S: Scheduler + 'static,
+    {
+        let config = Config::default();
+
+        let scheduler = RecordingScheduler::new(scheduler, Some(WritingConfig::new(serialize_to)));
+
+        let runner = Runner::new(scheduler, config);
+        runner.run(f);
+    }
+
+    fn replay_schedules<F>(f: F, deserialize_from: &Path)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let config = Config::default();
+
+        let scheduler = CheckReplayScheduler::new_from_file(deserialize_from);
+
+        let runner = Runner::new(scheduler, config);
+        runner.run(f);
+    }
+
+    fn have_n_threads_acquire_mutex<R: rand::RngCore, F: (Fn() -> R) + Send + Sync>(
+        thread_rng: &'static F,
+        num_threads: u64,
+        modulus: u64,
+    ) {
+        let lock = Arc::new(Mutex::new(0u64));
+        let threads: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let my_lock = lock.clone();
+
+                thread::spawn(move || {
+                    let x = thread_rng().gen::<u64>();
+
+                    if x % modulus == 0 {
+                        let mut num = my_lock.lock().unwrap();
+                        *num += 1;
+                    }
+                })
+            })
+            .collect();
+
+        threads.into_iter().for_each(|t| t.join().expect("Failed"));
+    }
+
+    fn spawn_random_amount_of_threads<R: rand::RngCore, F: (Fn() -> R) + Send + Sync>(
+        thread_rng: &'static F,
+        max_threads: u64,
+    ) {
+        let num_threads: u64 = thread_rng().gen::<u64>() % max_threads;
+        have_n_threads_acquire_mutex(&rand::thread_rng, num_threads, 1);
+    }
+
+    struct RemoveFileOnDrop<'a> {
+        path: &'a Path,
+    }
+
+    impl<'a> RemoveFileOnDrop<'a> {
+        fn new(path: &'a Path) -> Self {
+            Self { path }
+        }
+    }
+
+    impl Drop for RemoveFileOnDrop<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.path);
+        }
+    }
+
+    #[test]
+    fn test_serialize_deserialize_ok_case() {
+        static FILENAME: &str = "test_serialize_deserialize_err.ajson";
+        let path = Path::new(FILENAME);
+        let _rfod = RemoveFileOnDrop::new(path);
+
+        let inner_scheduler = RandomScheduler::new(1000);
+        record_schedules(
+            || have_n_threads_acquire_mutex(&crate::rand::thread_rng, 10, 10),
+            inner_scheduler,
+            path,
+        );
+
+        replay_schedules(|| have_n_threads_acquire_mutex(&crate::rand::thread_rng, 10, 10), path);
+    }
+
+    // TODO: Why does this sometimes not panic? Isn't 1k iterations enough?
+    #[test]
+    #[should_panic = "replay unsuccessful"]
+    fn test_serialize_deserialize_panic_case() {
+        static FILENAME: &str = "test_serialize_deserialize_err.json";
+        let path = Path::new(FILENAME);
+        let _rfod = RemoveFileOnDrop::new(path);
+
+        let inner_scheduler = RandomScheduler::new(1000);
+        record_schedules(
+            || have_n_threads_acquire_mutex(&rand::thread_rng, 10, 10),
+            inner_scheduler,
+            path,
+        );
+
+        replay_schedules(|| have_n_threads_acquire_mutex(&rand::thread_rng, 10, 10), path);
+    }
+
+    #[test]
+    #[should_panic = "replay unsuccessful"]
+    fn test_serialize_deserialize_panic_mismatching_tests() {
+        static FILENAME: &str = "test_serialize_deserialize_err2.json";
+        let path = Path::new(FILENAME);
+        let _rfod = RemoveFileOnDrop::new(path);
+
+        let inner_scheduler = RandomScheduler::new(1000);
+        record_schedules(
+            || have_n_threads_acquire_mutex(&crate::rand::thread_rng, 10, 10),
+            inner_scheduler,
+            path,
+        );
+
+        // Try to replay on a different test
+        replay_schedules(|| spawn_random_amount_of_threads(&crate::rand::thread_rng, 10), path);
     }
 }

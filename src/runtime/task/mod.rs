@@ -5,6 +5,7 @@ use crate::runtime::thread;
 use crate::runtime::thread::continuation::{ContinuationPool, PooledContinuation};
 use crate::thread::LocalKey;
 use bitvec::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -426,7 +427,7 @@ pub(crate) struct ParkState {
 
 /// A `TaskId` is a unique identifier for a task. `TaskId`s are never reused within a single
 /// execution.
-#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TaskId(pub(super) usize);
 
 impl Debug for TaskId {
