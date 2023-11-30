@@ -313,22 +313,22 @@ impl Scheduler for CheckReplayScheduler {
         match &self.schedules[self.current_schedule_idx][self.current_step] {
             ScheduleRecord::Task(next_task_record) => {
                 if current_task != next_task_record.current_task {
-                    panic!("replay unsuccessful: different current tasks. This should not happen, and suggest an invariant breakage elsewhere. Current task: {current_task:?}, in the replay: {:?}", next_task_record.current_task);
+                    panic!("replay unsuccessful at step: {}: different current tasks. This should not happen, and suggest an invariant breakage elsewhere. Current task: {current_task:?}, in the replay: {:?}", self.current_step, next_task_record.current_task);
                 }
 
                 if next_task_record.runnable_tasks.as_slice() != runnable_tasks {
-                    panic!("replay unsuccessful: set of runnable tasks is different than expected (expected {:?} but got {runnable_tasks:?})", next_task_record.runnable_tasks);
+                    panic!("replay unsuccessful at step: {}: set of runnable tasks is different than expected (expected {:?} but got {runnable_tasks:?})", self.current_step, next_task_record.runnable_tasks);
                 }
 
                 if next_task_record.is_yielding != is_yielding {
-                    panic!("replay unsuccessful: `next_task` was called with `is_yielding` equal to {} in the original execution, and {is_yielding} in the current execution", next_task_record.is_yielding);
+                    panic!("replay unsuccessful at step: {}: `next_task` was called with `is_yielding` equal to {} in the original execution, and {is_yielding} in the current execution", self.current_step, next_task_record.is_yielding);
                 }
 
                 self.current_step += 1;
                 next_task_record.returned_task_id
             }
             ScheduleRecord::Random(_) => {
-                panic!("replay unsuccessful: next step was context switch, but recording expected random number generation")
+                panic!("replay unsuccessful at step: {}: next step was context switch, but recording expected random number generation", self.current_step)
             }
         }
     }
@@ -337,15 +337,15 @@ impl Scheduler for CheckReplayScheduler {
         let len = self.schedules[self.current_schedule_idx].len();
         if self.current_step >= len {
             panic!(
-                "replay unsuccessful: current execution should have ended after {} steps, whereas current step count is {}",
-                len,
-                self.current_step
+                "replay unsuccessful at step: {}: current execution should have ended after {} steps",
+                self.current_step, len,
             );
         }
 
         match &self.schedules[self.current_schedule_idx][self.current_step] {
             ScheduleRecord::Task(..) => panic!(
-                "replay unsuccessful: next step was random number generation, but recording expected context switch"
+                "replay unsuccessful at step: {}: next step was random number generation, but recording expected context switch",
+                self.current_step
             ),
             ScheduleRecord::Random(num) => {
                 self.current_step += 1;
