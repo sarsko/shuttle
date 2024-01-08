@@ -94,7 +94,7 @@ pub(crate) struct Task {
     // The `Span` containing the `Task`s `id` and the current step count (if step count recording is enabled)
     pub(super) step_span: Span,
     // The current `Span` of the `Task`. We have to have it by ownership in order for the `Span` to not get dropped while the task is switched out.
-    pub(super) span: Span,
+    pub(super) spans: Vec<Span>,
 
     // Arbitrarily settable tag which is inherited from the parent.
     tag: Option<Arc<dyn Tag>>,
@@ -109,7 +109,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
-        parent_span_id: Option<tracing::span::Id>,
+        mut span_stack: Vec<Span>,
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
@@ -123,8 +123,10 @@ impl Task {
         let waker = make_waker(id);
         let continuation = Rc::new(RefCell::new(continuation));
 
+        let parent_span_id: Option<tracing::span::Id> = span_stack.last().map(|span| span.id()).flatten();
+        // TODO: Verify that unwrap is OK
         let step_span = error_span!(parent: parent_span_id.clone(), "step", task = id.0, i = field::Empty);
-        let span = step_span.clone();
+        span_stack.push(step_span.clone());
 
         let mut task = Self {
             id,
@@ -138,7 +140,7 @@ impl Task {
             park_state: ParkState::default(),
             name,
             step_span,
-            span,
+            spans: span_stack,
             local_storage: StorageMap::new(),
             tag: None,
         };
@@ -160,7 +162,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
-        parent_span_id: Option<tracing::span::Id>,
+        span_stack: Vec<Span>,
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
@@ -174,7 +176,7 @@ impl Task {
             id,
             name,
             clock,
-            parent_span_id,
+            span_stack,
             schedule_len,
             tag,
             parent_task_id,
@@ -188,7 +190,7 @@ impl Task {
         id: TaskId,
         name: Option<String>,
         clock: VectorClock,
-        parent_span_id: Option<tracing::span::Id>,
+        span_stack: Vec<Span>,
         schedule_len: usize,
         tag: Option<Arc<dyn Tag>>,
         parent_task_id: Option<TaskId>,
@@ -211,7 +213,7 @@ impl Task {
             id,
             name,
             clock,
-            parent_span_id,
+            span_stack,
             schedule_len,
             tag,
             parent_task_id,

@@ -30,6 +30,9 @@ tempfile = "3.2.0"
 test-log = { version = "0.2.8", default-features = false, features = ["trace"] }
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 
+[features]
+shuttle = []
+
 [lib]
 bench = false
 

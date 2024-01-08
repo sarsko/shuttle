@@ -152,8 +152,10 @@ impl Execution {
                             subscriber.exit(span_id);
                         }
 
-                        if let Some(span_id) = state.current().span.id().as_ref() {
-                            subscriber.enter(span_id)
+                        for span in &state.current().spans {
+                            if let Some(span_id) = span.id().as_ref() {
+                                subscriber.enter(span_id)
+                            }
                         }
 
                         if state.config.record_steps_in_span {
@@ -167,14 +169,19 @@ impl Execution {
                 // Leave the Task's span and store which span it exited in order to restore it the next time the Task is run
                 ExecutionState::with(|state| {
                     tracing::dispatcher::get_default(|subscriber| {
-                        let current_span = tracing::Span::current();
-                        if let Some(span_id) = current_span.id().as_ref() {
+                        let mut spans = vec![];
+                        while let Some(span_id) = tracing::Span::current().id().as_ref() {
+                            spans.push(tracing::Span::current().clone());
                             subscriber.exit(span_id);
                         }
-                        state.current_mut().span = current_span;
+                        spans.reverse();
+                        state.current_mut().spans = spans;
 
-                        if let Some(span_id) = state.top_level_span.id().as_ref() {
-                            subscriber.enter(span_id)
+                        for span in &state.top_level_spans {
+                            if let Some(span_id) = span.id().as_ref() {
+                                subscriber.enter(span_id)
+                            }
+                            // TODO: Add an else break?
                         }
                     });
                 });
@@ -241,7 +248,7 @@ pub(crate) struct ExecutionState {
     has_cleaned_up: bool,
 
     // The `Span` which the `ExecutionState` was created under. Will be the parent of all `Task` `Span`s
-    pub(crate) top_level_span: Span,
+    pub(crate) top_level_spans: Vec<Span>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -267,6 +274,25 @@ impl ScheduledTask {
 
 impl ExecutionState {
     fn new(config: Config, scheduler: Rc<RefCell<dyn Scheduler>>, initial_schedule: Schedule) -> Self {
+        /*
+        tracing::dispatcher::get_default(|subscriber| {
+            let mut spans = vec![];
+            while let Some(span_id) = tracing::Span::current().id().as_ref() {
+                spans.push(tracing::Span::current().clone());
+                subscriber.exit(span_id);
+            }
+            spans.reverse();
+            state.current_mut().spans = spans;
+
+            for span in &state.top_level_spans {
+                if let Some(span_id) = span.id().as_ref() {
+                    subscriber.enter(span_id)
+                }
+                // TODO: Add an else break?
+            }
+
+        })
+            */
         Self {
             config,
             tasks: SmallVec::new(),
@@ -279,7 +305,7 @@ impl ExecutionState {
             current_schedule: initial_schedule,
             #[cfg(debug_assertions)]
             has_cleaned_up: false,
-            top_level_span: tracing::Span::current(),
+            top_level_spans: vec![tracing::Span::current()],
         }
     }
 
@@ -327,7 +353,6 @@ impl ExecutionState {
     {
         Self::with(|state| {
             let schedule_len = state.current_schedule.len();
-            let parent_span_id = state.top_level_span.id();
 
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
@@ -340,7 +365,7 @@ impl ExecutionState {
                 task_id,
                 name,
                 clock.clone(),
-                parent_span_id,
+                state.top_level_spans.clone(),
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
@@ -361,7 +386,6 @@ impl ExecutionState {
         F: FnOnce() + Send + 'static,
     {
         Self::with(|state| {
-            let parent_span_id = state.top_level_span.id();
             let task_id = TaskId(state.tasks.len());
             let tag = state.get_tag_or_default_for_current_task();
             let clock = if let Some(ref mut clock) = initial_clock {
@@ -381,7 +405,7 @@ impl ExecutionState {
                 task_id,
                 name,
                 clock,
-                parent_span_id,
+                state.top_level_spans.clone(),
                 schedule_len,
                 tag,
                 state.try_current().map(|t| t.id()),
@@ -638,8 +662,9 @@ impl ExecutionState {
             }
         }
 
-        self.top_level_span
-            .in_scope(|| trace!(?runnable, next_task=?self.next_task));
+        self.top_level_spans
+            .last()
+            .map(|span| span.in_scope(|| trace!(?runnable, next_task=?self.next_task)));
 
         Ok(())
     }
