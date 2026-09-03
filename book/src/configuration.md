@@ -258,12 +258,23 @@ continuation function, handing it to a sacrificial thread) that are not implemen
 ## Environment variables
 
 These affect a whole test binary without touching any `Config`, which makes them the right tool for
-a one-off debugging run or a CI job. The names of three of them are re-exported as constants from
-`shuttle`.
+a one-off debugging run or a CI job.
+
+There are two sets of them, and the distinction matters more than it looks. The first set is read by
+Shuttle itself and applies to every Shuttle test. The second is read by the `shuttle-tokio` test
+harness, so those variables do something only for tests written as `#[tokio::test]` under the
+[tokio wrapper](./wrappers.md) — in a test that calls `check_random` or builds a `Runner` directly,
+they are ignored.
+
+### Read by Shuttle itself
+
+Three of these names are re-exported as constants from `shuttle`, so you can refer to them from code
+without retyping the string.
 
 | Variable | Constant | Effect |
 |---|---|---|
 | `SHUTTLE_RANDOM_SEED` | — | Seed for `RandomScheduler`, `UrwRandomScheduler` and `PctScheduler` |
+| `SHUTTLE_ALWAYS_PERSIST_SEED` | — | File to write every `RandomScheduler` execution's seed to |
 | `SHUTTLE_SILENCE_WARNINGS` | `shuttle::SILENCE_WARNINGS` | Suppress the atomics and `lazy_static` warnings |
 | `SHUTTLE_CAPTURE_BACKTRACE` | `shuttle::CAPTURE_BACKTRACE` | Capture and print task backtraces |
 | `SHUTTLE_ANNOTATION_FILE` | `shuttle::ANNOTATION_FILE` | Where the `annotation` feature writes its JSON |
@@ -277,6 +288,13 @@ SHUTTLE_RANDOM_SEED=12345 SHUTTLE_CAPTURE_BACKTRACE=1 cargo test --features shut
   logs the seed it adopted at `info` level. The value must parse as a `u64`; if it does not, the test
   panics with `The seed provided by SHUTTLE_RANDOM_SEED is not a valid u64`. This is the fastest way
   to re-run a randomized suite on a seed that failed in CI.
+- **`SHUTTLE_ALWAYS_PERSIST_SEED`** is a *path*, not a flag. `RandomScheduler` writes the seed of
+  each execution to that file as it starts the execution, overwriting the previous one, so after a
+  crash the file holds the seed of the execution that was running. That is its purpose: a panic
+  Shuttle can catch already prints its own seed, but a hard crash — a stack overflow, an abort from a
+  double panic — kills the process before anything is printed. If the write fails, the test panics
+  with `Failed to write seed to file`, and note that only `RandomScheduler` honours the variable;
+  `PctScheduler` and `UrwRandomScheduler` ignore it.
 - **`SHUTTLE_CAPTURE_BACKTRACE`** makes Shuttle capture a backtrace every time a task blocks or
   sleeps and include those backtraces in the deadlock panic message, so a deadlock report tells you
   where each task got stuck. Capturing backtraces is expensive: this is a debugging switch, not
@@ -287,6 +305,41 @@ SHUTTLE_RANDOM_SEED=12345 SHUTTLE_CAPTURE_BACKTRACE=1 cargo test --features shut
 `SHUTTLE_SILENCE_WARNINGS` and `SHUTTLE_CAPTURE_BACKTRACE` are checked for *presence* only: any value
 at all, including `0` and the empty string, turns them on, and unsetting the variable is the only way
 to turn them off.
+
+### Read by the `shuttle-tokio` test harness
+
+`#[tokio::test]` under `shuttle-tokio` expands to a call into the wrapper's own check function, which
+builds the scheduler and `Config` for you. These variables are how you steer that, since there is no
+`Config` of yours to edit:
+
+| Variable | Effect | Default |
+|---|---|---|
+| `SHUTTLE_ITERATIONS` | Number of iterations | 100 |
+| `SHUTTLE_TIMEOUT_SECS` | Wall-clock budget instead of an iteration count | unset |
+| `SHUTTLE_SCHEDULER` | `PCT`, `PORTFOLIO`, or anything else for random | random |
+| `SHUTTLE_PCT_MAX_DEPTH` | Preemption bound for `PCT` and `PORTFOLIO` | 3 |
+| `SHUTTLE_TRACE_DIR` | Persist failing schedules to this directory | unset (print) |
+| `SHUTTLE_TRACE_FILE` | Replay this schedule file instead of searching | unset |
+| `SHUTTLE_HIDE_TRACE` | Swallow `tracing` output while still evaluating it | unset |
+| `SHUTTLE_INTERVAL_TICKS` | Ticks each `tokio::time::Interval` produces | `usize::MAX` |
+
+A few notes. `SHUTTLE_TIMEOUT_SECS` wins over `SHUTTLE_ITERATIONS`: setting it makes the harness pass
+`usize::MAX` iterations and stop on `Config::max_time` instead. `SHUTTLE_TRACE_FILE` bypasses the
+search entirely — the harness runs a `ReplayScheduler` on that file and sets
+`failure_persistence = None` — which is the replay half of the workflow described in
+[Debugging failures](./debugging.md). A value that fails to parse is silently ignored and the default
+used, so a typo in `SHUTTLE_ITERATIONS` leaves you quietly on 100.
+
+`SHUTTLE_HIDE_TRACE` is the one variable whose *value* is matched rather than its presence: only
+`true` and `1` count. It installs a subscriber that formats every event and writes it to
+`io::sink()`, which sounds pointless but is not. Tracing statements that touch synchronization
+primitives add scheduling points, so a schedule recorded at one verbosity does not replay at another;
+running the search under `RUST_LOG=trace SHUTTLE_HIDE_TRACE=true` pays that cost without the log
+volume, and the resulting schedule then replays under plain `RUST_LOG=trace` with all the output
+visible. See [Minimizing and triaging a failure](./triage.md).
+
+`SHUTTLE_SILENCE_WARNINGS` appears in both sets: Shuttle core uses it for its own warnings, and the
+tokio wrapper checks it separately before warning about `Interval::period` depending on real time.
 
 ## Crate features
 

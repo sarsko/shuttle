@@ -191,13 +191,18 @@ make failures reproducible is reasonable; enabling it in production is a deliber
   `watch`) are reimplemented on Shuttle.
 * `#[tokio::test]` does the right thing in both builds: without the feature it is tokio's
   macro; with it, it wraps your async body in a Shuttle check running **100 iterations** by
-  default. `SHUTTLE_ITERATIONS` and the other `SHUTTLE_*` variables from [Configuring test
-  runs](./configuration.md) apply. Needs the `macros` feature.
+  default, with `stack_size = 0x000F_0000` and `max_steps = FailAfter(10_000_000)`. Since you
+  do not get to build that `Config` yourself, the harness reads `SHUTTLE_ITERATIONS`,
+  `SHUTTLE_TIMEOUT_SECS`, `SHUTTLE_SCHEDULER`, `SHUTTLE_PCT_MAX_DEPTH`, `SHUTTLE_TRACE_DIR`,
+  `SHUTTLE_TRACE_FILE` and `SHUTTLE_HIDE_TRACE` instead — see [Read by the `shuttle-tokio` test
+  harness](./configuration.md#read-by-the-shuttle-tokio-test-harness). Needs the `macros` feature.
 * `io`, `net` and `fs` are plain re-exports of real tokio. They exist so your code *compiles*
   under the feature; using them inside a Shuttle test will misbehave.
 * Time is not modeled. `time::pause()` is a no-op and timers do not advance; the impl instead
-  offers hooks for forcing specific timeouts to fire. Do not write tests whose logic depends
-  on a `sleep` completing — see [Async code and futures](./async.md).
+  offers hooks for forcing specific timeouts to fire. `Interval::tick()` returns immediately and
+  forever, so `SHUTTLE_INTERVAL_TICKS` exists to bound the number of ticks an `Interval` hands
+  out. Do not write tests whose logic depends on a `sleep` completing — see [Async code and
+  futures](./async.md).
 * `task_local!` is known to be wrong: all tasks currently share one slot.
 * The tracked list of unsupported constructs is
   [awslabs/shuttle#241](https://github.com/awslabs/shuttle/issues/241).
