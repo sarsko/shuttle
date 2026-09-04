@@ -21,3 +21,10 @@
 - [How Shuttle works](./internals.md)
 - [Determinism rules and common pitfalls](./pitfalls.md)
 - [Performance and continuous integration](./ci-and-performance.md)
+
+# Shuttle in practice
+
+- [Reference tests](./reftests.md)
+- [Fault injection and failure modeling](./fault-injection.md)
+- [Minimizing and triaging a failure](./triage.md)
+- [Using LLMs for Shuttle work](./llms.md)
