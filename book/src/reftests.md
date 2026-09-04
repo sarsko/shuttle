@@ -388,7 +388,8 @@ internals move.
 
 Shuttle has nothing that produces a behavioral trace for you to diff, and it is easy to assume otherwise
 because `shuttle-tokio`'s `check` helper reads two environment variables that look like trace plumbing
-(documented on `check` in `wrappers/tokio/impls/tokio/inner/src/lib.rs`): `SHUTTLE_TRACE_DIR` sets
+([Read by the `shuttle-tokio` test harness](./configuration.md#read-by-the-shuttle-tokio-test-harness)):
+`SHUTTLE_TRACE_DIR` sets
 `Config::failure_persistence` to `File(Some(dir))`, so a failing run drops its schedule at
 `dir/schedule000.txt`, and `SHUTTLE_TRACE_FILE` swaps the scheduler for a `ReplayScheduler::new_from_file` and
 runs the body once against that schedule. Both deal exclusively in **schedules** — the opaque hex blob

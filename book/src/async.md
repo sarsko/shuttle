@@ -436,7 +436,9 @@ async fn transfers_are_atomic() {
 ```
 
 That runs the body 100 times by default; `SHUTTLE_ITERATIONS` and `SHUTTLE_SCHEDULER` override the
-count and the scheduler without touching the test. When you want finer control, drop back to
+count and the scheduler without touching the test (the harness reads several more — see [Read by the
+`shuttle-tokio` test harness](./configuration.md#read-by-the-shuttle-tokio-test-harness)). When you
+want finer control, drop back to
 `shuttle::check_dfs(|| future::block_on(async { ... }), None)` — the wrapper types still work.
 
 Coverage is good but not complete: `io`, `net` and `fs` are re-exported from real tokio only so that
