@@ -1,0 +1,38 @@
+[package]
+name = "shuttle-io-uring"
+# Wrappers mirror the version of the crate they wrap, so that a downstream crate can depend on the
+# wrapper with the same `version = "0.7"` requirement it would have used for io-uring.
+version = "0.7.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "io-uring wrapper for the Shuttle concurrency testing tool."
+repository = "https://github.com/awslabs/shuttle"
+
+[features]
+shuttle = [ "dep:shuttle-io-uring-inner" ]
+
+# io-uring's features. Each one is forwarded to io-uring, which is a dependency in both modes, and to
+# the inner crate where it changes the API the inner crate mirrors (`io_safety`, which adds
+# `AsFd for IoUring`). The others select how io-uring reaches the kernel, which the simulation does
+# not, so they only take effect without `shuttle`. io-uring's `sc` feature is an implementation
+# detail of its `direct-syscall`, so it is not mirrored.
+bindgen = [ "io-uring-orig/bindgen" ]
+direct-syscall = [ "io-uring-orig/direct-syscall" ]
+io_safety = [ "io-uring-orig/io_safety", "shuttle-io-uring-inner?/io_safety" ]
+overwrite = [ "io-uring-orig/overwrite" ]
+
+[dependencies]
+cfg-if = "1.0"
+
+# io_uring is Linux's: io-uring builds only there, and the simulation runs Linux system calls. On
+# other targets this crate is empty, so that a workspace that has it as a member still builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+# Under `shuttle` this crate has io-uring 0.7.16's API, so it needs io-uring 0.7.16 in both modes.
+io-uring-orig = { package = "io-uring", version = "0.7.16" }
+shuttle-io-uring-inner = { path = "./shuttle_io_uring_inner", version = "0.1.0", optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# For the tests that run under `--features shuttle`.
+shuttle = { path = "../../shuttle", version = "0.9.2" }
+tempfile = "3.2.0"
+libc = "0.2.98"
