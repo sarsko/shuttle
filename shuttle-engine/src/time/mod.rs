@@ -19,6 +19,7 @@ use pin_project::pin_project;
 use std::task::{Context, Poll, Waker};
 
 use crate::runtime::execution::ExecutionState;
+use crate::runtime::task::{Event, EventKind};
 
 use crate::runtime::thread;
 
@@ -292,17 +293,18 @@ impl PartialOrd for Instant {
 
 /// Puts the current thread to sleep
 /// Behavior of this function depends on the TimeModel provided to Shuttle
+#[track_caller]
 pub fn sleep(dur: Duration) {
     // A destructor can sleep while its task unwinds, or while the execution is torn down. Nothing wakes a sleeper
     // once the execution has finished, so these sleeps are just a scheduling point, as every sleep was before time
     // models.
     if dur == Duration::ZERO || std::thread::panicking() || ExecutionState::with(|state| state.in_cleanup()) {
-        thread::switch();
+        thread::switch_with(Event::untargeted(EventKind::Sleep));
         return;
     }
     if get_time_model().borrow().sleep_is_a_scheduling_point() {
         let deadline = Instant::now().deadline_after(dur);
-        thread::switch();
+        thread::switch_with(Event::untargeted(EventKind::Sleep));
         // However long the thread waited to run again, at least its sleep has passed by now.
         move_clock_to(deadline);
         return;
