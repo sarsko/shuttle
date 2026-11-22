@@ -759,8 +759,8 @@ impl<T> Sender<T> {
             state: AtomicState::new(),
             ref_count_rx: AtomicUsize::new(0),
             ref_count_tx: AtomicUsize::new(1),
-            notify_rx: Notify::new(),
-            notify_tx: Notify::new(),
+            notify_rx: Waiters::default(),
+            notify_tx: Waiters::default(),
         });
 
         Sender { shared }
