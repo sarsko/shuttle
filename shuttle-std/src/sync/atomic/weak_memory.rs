@@ -29,7 +29,7 @@ use shuttle_engine::runtime::task::clock::VectorClock;
 use shuttle_engine::runtime::task::TaskId;
 use shuttle_engine::runtime::weak_memory::{TaskWeakMemoryClocks, WeakMemoryState};
 use smallvec::SmallVec;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
@@ -245,7 +245,7 @@ fn with<R>(f: impl FnOnce(TaskId, &mut VectorClock, &mut WeakMemoryState) -> R) 
 }
 
 /// An atomic load. `value` is the atomic's value, which is the newest store's.
-pub(super) fn load<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T>, order: Ordering) -> T {
+pub(super) fn load<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &Cell<T>, order: Ordering) -> T {
     let is_seqcst = order == Ordering::SeqCst;
     let readable = with(|me, clock, state| {
         let clocks = state.tasks.get(me);
@@ -254,7 +254,7 @@ pub(super) fn load<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T>
             clocks.read_seqcst.update(&state.last_sc_fence);
         }
         let mut buffer = buffer.borrow_mut();
-        buffer.prepare(state.execution, *value.borrow());
+        buffer.prepare(state.execution, value.get());
         buffer.readable(is_seqcst, clock, clocks)
     });
     // `next_u64` needs the execution state itself, so the store is picked between the two calls of
@@ -281,14 +281,14 @@ pub(super) fn load<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T>
 // which stops the reading task from going back to older stores.
 
 /// An atomic store.
-pub(super) fn store<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T>, val: T, order: Ordering) {
+pub(super) fn store<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &Cell<T>, val: T, order: Ordering) {
     let is_seqcst = order == Ordering::SeqCst;
     with(|me, clock, state| {
         clock.increment(me);
         let timestamp = entry(clock, me);
         let clocks = state.tasks.get(me);
         let mut buffer = buffer.borrow_mut();
-        buffer.prepare(state.execution, *value.borrow());
+        buffer.prepare(state.execution, value.get());
         // A Release store releases the task's clock. A Relaxed one releases what the task's last
         // Release fence did. Either way it ends the release sequence of the store before it: C++20
         // took out the exception for relaxed stores by the same thread.
@@ -310,7 +310,7 @@ pub(super) fn store<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T
             sc_loaded: false,
         };
         buffer.push(store, clock);
-        *value.borrow_mut() = val;
+        value.set(val);
     })
 }
 
@@ -319,7 +319,7 @@ pub(super) fn store<T: Copy>(buffer: &RefCell<StoreBuffer<T>>, value: &RefCell<T
 /// value. Otherwise it was only a load with the `failure` ordering, and this returns `Err`.
 pub(super) fn rmw<T: Copy>(
     buffer: &RefCell<StoreBuffer<T>>,
-    value: &RefCell<T>,
+    value: &Cell<T>,
     success: Ordering,
     failure: Ordering,
     f: impl FnOnce(T) -> Option<T>,
@@ -329,7 +329,7 @@ pub(super) fn rmw<T: Copy>(
         let timestamp = entry(clock, me);
         let clocks = state.tasks.get(me);
         let mut buffer = buffer.borrow_mut();
-        buffer.prepare(state.execution, *value.borrow());
+        buffer.prepare(state.execution, value.get());
         let read = buffer.newest();
         let old = read.val;
         match f(old) {
@@ -359,7 +359,7 @@ pub(super) fn rmw<T: Copy>(
                     sc_loaded: false,
                 };
                 buffer.push(store, clock);
-                *value.borrow_mut() = new;
+                value.set(new);
                 Ok(old)
             }
             None => {
