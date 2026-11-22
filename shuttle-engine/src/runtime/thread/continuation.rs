@@ -584,6 +584,9 @@ pub fn switch_before_poll() {
             ContinuationInput::Exit => panic!("unexpected exit continuation"),
             ContinuationInput::Resume => {}
             ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
+            ContinuationInput::CaptureBacktrace => {
+                unreachable!("a capture-only resume re-suspends inside `suspend`")
+            }
         }
     }
 }
