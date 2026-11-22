@@ -978,18 +978,19 @@ mod consistency_sc {
     }
 }
 
-// Static atomics outlive an execution.
+// Static atomics outlive an execution, but their state is per execution.
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn a_static_atomic_starts_each_execution_from_its_value() {
-    // Without starting over, the second execution's load could read the first execution's stores,
-    // which neither happen before it nor were read by a load that does.
+    // A static's state belongs to its execution, so each execution starts from the initial value,
+    // and no load can read an earlier execution's stores, which neither happen before it nor
+    // were read by a load that does.
     let last = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let last_by_test = Arc::clone(&last);
     Runner::new(RandomScheduler::new_from_seed(SEED, 500), weak_memory_config()).run(move || {
-        assert_eq!(COUNTER.load(Relaxed), last_by_test.load(SeqCst));
+        assert_eq!(COUNTER.load(Relaxed), 0);
         let other = thread::spawn(|| {
             COUNTER.fetch_add(1, Relaxed);
             COUNTER.fetch_add(1, AcqRel);
@@ -997,7 +998,7 @@ fn a_static_atomic_starts_each_execution_from_its_value() {
         other.join().unwrap();
         last_by_test.store(COUNTER.load(Relaxed), SeqCst);
     });
-    assert_eq!(last.load(SeqCst), 1_000);
+    assert_eq!(last.load(SeqCst), 2);
 }
 
 // Schedulers.
