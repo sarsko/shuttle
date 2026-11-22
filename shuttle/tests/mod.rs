@@ -45,12 +45,16 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 fn run_expecting_failure<F, S>(test_func: F, scheduler: S, config: Config, dir: &Path) -> (String, PathBuf)
 where
     F: Fn() + Send + Sync + UnwindSafe + 'static,
-    S: Scheduler + UnwindSafe + 'static,
+    S: Scheduler + 'static,
 {
     let payload = {
         let mut config = config;
         config.failure_persistence = FailurePersistence::File(Some(dir.to_path_buf()));
-        panic::catch_unwind(move || Runner::new(scheduler, config).run(test_func)).expect_err("test should panic")
+        // A scheduler need not be `UnwindSafe`: a `ReplayScheduler` that may continue after its
+        // schedule holds a boxed scheduler. The panic ends the run, and nothing uses the scheduler
+        // after it.
+        panic::catch_unwind(panic::AssertUnwindSafe(move || Runner::new(scheduler, config).run(test_func)))
+            .expect_err("test should panic")
     };
 
     let mut schedules = std::fs::read_dir(dir)
@@ -82,7 +86,7 @@ fn read_schedule(path: &Path) -> String {
 fn check_replay_roundtrip<F, S>(test_func: F, scheduler: S)
 where
     F: Fn() + Send + Sync + RefUnwindSafe + 'static,
-    S: Scheduler + UnwindSafe + 'static,
+    S: Scheduler + 'static,
 {
     let test_func = Arc::new(test_func);
 
@@ -113,7 +117,7 @@ where
 fn check_replay_roundtrip_file<F, S>(test_func: F, scheduler: S)
 where
     F: Fn() + Send + Sync + RefUnwindSafe + 'static,
-    S: Scheduler + UnwindSafe + 'static,
+    S: Scheduler + 'static,
 {
     let test_func = Arc::new(test_func);
 
