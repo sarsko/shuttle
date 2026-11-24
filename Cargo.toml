@@ -36,6 +36,8 @@ members = [
     "wrappers/once_cell/shuttle_once_cell_inner",
     "wrappers/spin",
     "wrappers/spin/shuttle_spin_inner",
+    "wrappers/arc_swap",
+    "wrappers/arc_swap/shuttle_arc_swap_inner",
 ]
 
 resolver = "2"
