@@ -1216,6 +1216,9 @@ pub struct Acquire<'a> {
 
     /// Where the acquire was created, for its `Event`s.
     location: &'static Location<'static>,
+    /// Where this acquire waits, if it is polled under a waker that is not Shuttle's, as inside
+    /// `FuturesUnordered`. See [`crate::await_backtrace::WaitRecord`].
+    wait_record: crate::await_backtrace::WaitRecord,
 }
 
 // Implement Debug in order to not output the `VectorClock`, matching `Waiter`.
@@ -1246,6 +1249,7 @@ impl<'a> Acquire<'a> {
             completed: false,
             never_polled: true,
             location: Location::caller(),
+            wait_record: Default::default(),
         }
     }
 
@@ -1599,9 +1603,14 @@ impl Future for Acquire<'_> {
                 Poll::Pending
             }
         };
-        // No backtrace capture here: the `cx.waker().clone()` calls above already route through
-        // Shuttle's waker vtable, which records the await site generically for *any* future. See
-        // `crate::await_backtrace`.
+        // Under a Shuttle waker, the `cx.waker().clone()` calls above already record the await
+        // site, as for any future. Under another waker, as inside `FuturesUnordered`, they record
+        // nothing, so keep a wait record instead. See `crate::await_backtrace`.
+        if out.is_pending() {
+            self.wait_record.note_pending(cx.waker());
+        } else {
+            self.wait_record.complete();
+        }
         out
     }
 }

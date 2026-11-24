@@ -413,6 +413,7 @@ impl Execution {
             Rc::clone(&self.scheduler),
             Rc::clone(&self.time_model),
         ));
+        crate::await_backtrace::reset_wait_records();
 
         init_panic_hook();
         // Held for the rest of this function, including while a failing execution unwinds, so that the
