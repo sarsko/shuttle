@@ -30,6 +30,8 @@ members = [
     "wrappers/dashmap/dashmap_impl",
     "wrappers/io_uring",
     "wrappers/io_uring/io_uring_impl",
+    "wrappers/uuid",
+    "wrappers/uuid/shuttle_uuid_inner",
 ]
 
 resolver = "2"
