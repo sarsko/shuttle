@@ -21,6 +21,8 @@ pub enum ResourceType {
     Mutex,
     RwLock,
     Once,
+    OnceLock,
+    LazyLock,
     MpscChannel,
 }
 
