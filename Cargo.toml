@@ -32,6 +32,8 @@ members = [
     "wrappers/io_uring/io_uring_impl",
     "wrappers/uuid",
     "wrappers/uuid/shuttle_uuid_inner",
+    "wrappers/once_cell",
+    "wrappers/once_cell/shuttle_once_cell_inner",
 ]
 
 resolver = "2"
