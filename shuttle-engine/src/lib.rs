@@ -13,8 +13,8 @@ pub mod thread_support;
 pub mod time;
 
 pub use config::{
-    Config, ContinuationFunctionBehavior, FailurePersistence, MaxSteps, UngracefulShutdownConfig,
-    UNGRACEFUL_SHUTDOWN_CONFIG,
+    Config, ContinuationFunctionBehavior, FailurePersistence, MaxSteps, ScheduleEncoding, ScheduleTextEncoding,
+    UngracefulShutdownConfig, UNGRACEFUL_SHUTDOWN_CONFIG,
 };
 pub use runtime::runner::{PortfolioRunner, Runner};
 pub use sync_types::{AccessKind, ResourceSignature, ResourceType};
