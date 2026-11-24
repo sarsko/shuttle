@@ -44,3 +44,7 @@ weak-memory = ["vector-clocks"]
 checked-cell = ["vector-clocks"]
 bench-no-vector-clocks = []
 advanced-time-models = []
+# Fail a test when a step (the code a task runs between two scheduling points) accesses two shared
+# resources, at least one of them for writing (see `ExecutionState::record_access`). For developers
+# of Shuttle primitives and wrappers.
+check-scheduling-points = []

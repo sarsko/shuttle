@@ -529,6 +529,7 @@ unsafe impl Send for PooledContinuation {}
 ///
 /// [`Task::next_event`]: crate::runtime::task::Task::next_event
 #[track_caller]
+#[inline]
 pub fn switch() {
     switch_with(Event::new(EventKind::Unknown, None, Location::caller()));
 }
@@ -536,21 +537,16 @@ pub fn switch() {
 /// Like [`switch`], for a scheduling point before the operation that `event` describes. While the
 /// task is switched out here, schedulers see `event` as its next event (see
 /// [`Task::next_event`](crate::runtime::task::Task::next_event)).
+#[inline]
+#[cfg_attr(feature = "check-scheduling-points", track_caller)]
 pub fn switch_with(event: Event) {
-    crate::annotations::record_tick();
     trace!("switch before {}", event);
-    if ExecutionState::maybe_yield_before(NextEvent::Operation(event)) {
-        // Other tasks run on this thread until this one is switched back in, and must not see its
-        // await-site state in the meantime. Nothing reads that state unless backtraces are enabled.
-        let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
-
-        match suspend() {
-            ContinuationInput::Exit => panic!("unexpected exit continuation"),
-            ContinuationInput::Resume => {}
-            ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
-            ContinuationInput::CaptureBacktrace => {
-                unreachable!("a capture-only resume re-suspends inside `suspend`")
-            }
+    match scheduling_point(NextEvent::Operation(event)) {
+        ContinuationInput::Exit => panic!("unexpected exit continuation"),
+        ContinuationInput::Resume => {}
+        ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
+        ContinuationInput::CaptureBacktrace => {
+            unreachable!("a capture-only resume re-suspends inside `suspend`")
         }
     }
     step_time_model();
@@ -569,6 +565,7 @@ pub fn switch_if_not_stopping() {
 /// Like [`switch_if_not_stopping`], for a scheduling point before the operation that `event`
 /// describes (see [`switch_with`]).
 #[inline]
+#[cfg_attr(feature = "check-scheduling-points", track_caller)]
 pub fn switch_if_not_stopping_with(event: Event) {
     if !ExecutionState::should_stop() {
         switch_with(event);
@@ -580,20 +577,16 @@ pub fn switch_if_not_stopping_with(event: Event) {
 /// out here, schedulers see [`EventKind::Unknown`] as its next event, until a Shuttle semaphore
 /// wakes it; then they see the acquire it was woken for (see
 /// [`Task::next_event`](crate::runtime::task::Task::next_event)).
+#[inline]
+#[cfg_attr(feature = "check-scheduling-points", track_caller)]
 pub fn switch_before_poll() {
-    crate::annotations::record_tick();
     trace!("switch before poll");
-    if ExecutionState::maybe_yield_before(NextEvent::Poll) {
-        // As in `switch`: the task's await-site state is set aside while other tasks run.
-        let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
-
-        match suspend() {
-            ContinuationInput::Exit => panic!("unexpected exit continuation"),
-            ContinuationInput::Resume => {}
-            ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
-            ContinuationInput::CaptureBacktrace => {
-                unreachable!("a capture-only resume re-suspends inside `suspend`")
-            }
+    match scheduling_point(NextEvent::Poll) {
+        ContinuationInput::Exit => panic!("unexpected exit continuation"),
+        ContinuationInput::Resume => {}
+        ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
+        ContinuationInput::CaptureBacktrace => {
+            unreachable!("a capture-only resume re-suspends inside `suspend`")
         }
     }
 }
@@ -602,17 +595,33 @@ pub fn switch_before_poll() {
 /// `Task::from_future`), between two polls. Returns true if execution teardown cancelled the task
 /// while it was switched out (see `Continuation::cancel`), in which case the loop drops the future
 /// instead of polling it again.
+#[inline]
+#[cfg_attr(feature = "check-scheduling-points", track_caller)]
 pub(crate) fn switch_between_polls() -> bool {
-    crate::annotations::record_tick();
     trace!("switch between polls");
-    if !ExecutionState::maybe_yield_before(NextEvent::Poll) {
-        return false;
+    scheduling_point(NextEvent::Poll) == ContinuationInput::Cancel
+}
+
+/// The scheduling point that `switch_with`, `switch_before_poll` and `switch_between_polls` share:
+/// run the scheduler, and suspend the current task if it chose another. Returns what the task is
+/// resumed with if it was suspended, and `Resume` if it continues without being suspended.
+///
+/// This is the one copy of `ExecutionState::maybe_yield_before`, which is inlined here, so that
+/// bookkeeping done at every scheduling point lives in one place. With a copy in each kind of
+/// scheduling point, the compiler stops inlining the `ExecutionState::with` inside it, and every
+/// scheduling point pays for the calls.
+#[inline(never)]
+#[cfg_attr(feature = "check-scheduling-points", track_caller)]
+fn scheduling_point(next: NextEvent) -> ContinuationInput {
+    crate::annotations::record_tick();
+    if ExecutionState::maybe_yield_before(next) {
+        // Other tasks run on this thread until this one is switched back in, and must not see its
+        // await-site state in the meantime. Nothing reads that state unless backtraces are enabled.
+        let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
+        suspend()
+    } else {
+        ContinuationInput::Resume
     }
-
-    // As in `switch`: the task's await-site state is set aside while other tasks run.
-    let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
-
-    suspend() == ContinuationInput::Cancel
 }
 
 /// Suspend the current task's continuation, and return what it is resumed with.

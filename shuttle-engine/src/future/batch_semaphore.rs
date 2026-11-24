@@ -4,7 +4,7 @@ use crate::runtime::execution::ExecutionState;
 use crate::runtime::per_execution::PerExecution;
 use crate::runtime::task::{clock::VectorClock, Event, EventKind, EventTarget, TaskId};
 use crate::runtime::thread;
-use crate::sync_types::{ResourceSignature, ResourceType};
+use crate::sync_types::{AccessKind, ResourceSignature, ResourceType};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
@@ -549,7 +549,6 @@ pub struct BatchSemaphore {
     /// finds in it.
     initial_permits: usize,
     fairness: Fairness,
-    #[allow(unused)]
     signature: ResourceSignature,
 }
 
@@ -684,6 +683,8 @@ impl BatchSemaphore {
     /// holds the semaphore (see [`BatchSemaphore::acquire_reserving`]), this is
     /// zero: the available permits are kept for the holder.
     pub fn available_permits(&self) -> usize {
+        // TODO: Report this read to the scheduling-point checker (see `record_access`) once queries
+        // take a scheduling point before they read the state, which is still open (see #262).
         match self.try_state() {
             Some(state) => state.borrow().available(),
             // Where the execution's state can't be reached, what the execution starts with.
@@ -720,6 +721,7 @@ impl BatchSemaphore {
 
     /// Closes the semaphore without invoking `thread::switch`
     pub fn close_no_scheduling_point(&self) {
+        self.record_access(AccessKind::Write);
         // Where the execution's state can't be reached, there is nothing to close (see
         // `ExecutionState::should_stop`).
         let Some(state) = self.try_state_with_id() else {
@@ -759,6 +761,8 @@ impl BatchSemaphore {
 
     /// Returns true iff the semaphore is closed.
     pub fn is_closed(&self) -> bool {
+        // TODO: Report this read to the scheduling-point checker (see `record_access`) once queries
+        // take a scheduling point before they read the state, which is still open (see #262).
         // Where the execution's state can't be reached, what the execution starts with.
         self.try_state().is_some_and(|state| state.borrow().closed)
     }
@@ -770,6 +774,7 @@ impl BatchSemaphore {
     #[track_caller]
     pub fn try_acquire(&self, num_permits: usize) -> Result<(), TryAcquireError> {
         thread::switch_with(Event::on_resource(EventKind::SemaphoreAcquire, &self.signature));
+        self.record_access(AccessKind::Write);
 
         let mut state = self.state_with_id().borrow_mut();
         let id = state.id.unwrap();
@@ -1027,6 +1032,7 @@ impl BatchSemaphore {
         if num_permits == 0 {
             return;
         }
+        self.record_access(AccessKind::Write);
 
         // Where the execution's state can't be reached, the release skips its bookkeeping, as it
         // does where Shuttle holds its state borrowed (see `ExecutionState::should_stop`).
@@ -1138,6 +1144,7 @@ impl BatchSemaphore {
         assert!(permits_to_be_held > permits_currently_held);
 
         thread::switch_with(Event::on_resource(EventKind::SemaphoreAcquire, &self.signature));
+        self.record_access(AccessKind::Write);
 
         let num_permits = permits_to_be_held - permits_currently_held;
         let mut state = self.state_with_id().borrow_mut();
@@ -1467,8 +1474,24 @@ impl Future for Acquire<'_> {
         // Thus we apply the double-yield optimization for *unfair* semaphores only
         let blocking_is_not_commutative = self.semaphore.fairness == Fairness::StrictlyFair;
 
-        if self.never_polled && (will_succeed || blocking_is_not_commutative) {
+        let switched = self.never_polled && (will_succeed || blocking_is_not_commutative);
+        if switched {
             thread::switch_with(self.event());
+        }
+        // The rest of this poll counts as an operation on the semaphore, so we report a write
+        // access to the checker, unless one of two cases exempts it:
+        //
+        //   1. `has_permits()`: the permits were granted by an earlier `release` and are already
+        //      this acquire's. No other operation can take them away, so observing them here is
+        //      not an operation on the shared state.
+        //
+        //   2. A first poll that skipped the scheduling point above (`never_polled && !switched`):
+        //      it only blocks, and by the reasoning above blocking commutes with every other
+        //      operation on the semaphore, so it is not an operation either.
+        //
+        // The `will_succeed` read above does not count: it only decides whether to switch.
+        if !self.has_permits() && (switched || !self.never_polled) {
+            self.semaphore.record_access(AccessKind::Write);
         }
         self.never_polled = false;
 
@@ -1628,6 +1651,7 @@ impl Drop for Acquire<'_> {
         }
         if self.is_queued() {
             // If the associated waiter is in the wait list, remove it
+            self.semaphore.record_access(AccessKind::Write);
             let waiter = self
                 .waiter
                 .clone()
@@ -1636,6 +1660,7 @@ impl Drop for Acquire<'_> {
         } else if self.is_reserving() {
             // If the acquire holds the reservation, end it, so that it does not
             // keep the permits from other requests.
+            self.semaphore.record_access(AccessKind::Write);
             let waiter = self
                 .waiter
                 .clone()
@@ -1669,5 +1694,13 @@ impl BatchSemaphore {
     /// Returns a reference to this semaphore's resource signature.
     pub fn signature(&self) -> &ResourceSignature {
         &self.signature
+    }
+
+    /// Report an access to this semaphore's state to the scheduling-point checker (see
+    /// `ExecutionState::record_access`).
+    #[inline(always)]
+    #[track_caller]
+    fn record_access(&self, kind: AccessKind) {
+        ExecutionState::record_access(&self.signature, kind);
     }
 }

@@ -116,6 +116,7 @@ use shuttle_engine::runtime::task::clock::VectorClock;
 use shuttle_engine::runtime::task::{Event, EventKind};
 use shuttle_engine::runtime::thread;
 use shuttle_engine::silence_warnings;
+use shuttle_engine::sync_types::AccessKind;
 use std::cell::{Cell, RefCell};
 use std::panic::RefUnwindSafe;
 
@@ -289,6 +290,7 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         maybe_warn_about_ordering(order);
 
         thread::switch_with(Event::on_resource(EventKind::AtomicLoad, &self.signature));
+        ExecutionState::record_access(&self.signature, AccessKind::Read);
         // The execution's state of the atomic, looked up once: for a `static` atomic the lookup
         // goes through the execution's storage (see `PerExecution`).
         let state = self.state();
@@ -305,6 +307,7 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         maybe_warn_about_ordering(order);
 
         thread::switch_with(Event::on_resource(EventKind::AtomicStore, &self.signature));
+        ExecutionState::record_access(&self.signature, AccessKind::Write);
         let state = self.state();
         #[cfg(feature = "weak-memory")]
         if weak_memory::enabled() {
@@ -320,6 +323,7 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
 
         // swap behaves like { let x = load() ; store(val) ; x }
         thread::switch_with(Event::on_resource(EventKind::AtomicReadModifyWrite, &self.signature));
+        ExecutionState::record_access(&self.signature, AccessKind::Write);
         let state = self.state();
         #[cfg(feature = "weak-memory")]
         if weak_memory::enabled() {
@@ -347,6 +351,7 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         // `update` methods run user callbacks, so they loop over `load` and `compare_exchange_weak`
         // instead, just like `std`.
         thread::switch_with(Event::on_resource(EventKind::AtomicReadModifyWrite, &self.signature));
+        ExecutionState::record_access(&self.signature, AccessKind::Read);
         let state = self.state();
         #[cfg(feature = "weak-memory")]
         if weak_memory::enabled() {
@@ -355,6 +360,7 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         exhale_clock(state); // for the load()
         let current = state.value.get();
         if let Some(new) = f(current) {
+            ExecutionState::record_access(&self.signature, AccessKind::Write);
             state.value.set(new);
             inhale_clock(state); // for the store()
             Ok(current)

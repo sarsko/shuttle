@@ -50,6 +50,9 @@ bench = false
 
 [features]
 default = []
+# Fail tests whose steps access two shared resources without a scheduling point in between (see
+# `ExecutionState::record_access`). For developers of Shuttle primitives and wrappers.
+check-scheduling-points = ["shuttle-engine/check-scheduling-points", "shuttle-std/check-scheduling-points"]
 vector-clocks = ["shuttle-engine/vector-clocks"]
 # Weak-memory emulation for the atomics, which `Config::weak_memory` turns on (see `sync::atomic`)
 weak-memory = ["vector-clocks", "shuttle-engine/weak-memory", "shuttle-std/weak-memory"]

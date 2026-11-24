@@ -25,6 +25,7 @@ mod pos;
 mod replay;
 mod resource_signatures;
 mod rwlock;
+mod scheduling_point_checker;
 mod shared_statics;
 mod shrink;
 mod statics;
