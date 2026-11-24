@@ -6,6 +6,7 @@
 * Fix: the panic hook captured the `Config` of the first execution in the process, so later `Runner`s' `FailurePersistence` settings were ignored.
 * Fix: replaying a persisted schedule no longer reports "schedule ended early". A schedule recorded at the moment of failure stops there, but the replayed execution keeps scheduling as the panic unwinds; those decisions are now made freely instead of aborting the replay. `ReplayScheduler::set_allow_incomplete` is no longer needed to replay a schedule Shuttle wrote. With it set, a replay still stops at the end of the schedule.
 * Fix: a panic occurring after a Shuttle test finished, including one raised by the surrounding test harness, was reported as a Shuttle failure and serialized the schedule of the execution that had already completed. (#316)
+* `thread_local!` values, `current::get_current_task` and `current::try_get_current_task` now work while Shuttle is updating its own state, which a task can be doing: in the `tracing` subscribers Shuttle calls for some of its own events, in the callbacks of the task's spans, which Shuttle replays when it switches tasks, and in `ChildLabelFn`s. Shuttle keeps the current task and the tasks' thread-local storage out of its state for that. Before, `get_current_task` and thread-local access panicked there, and `try_get_current_task` returned `None`. `shuttle-tokio`'s task-locals and `task::try_id` see the current task there too, as they would in tokio. (#393)
 
 # 0.9.10 (November 4, 2026)
 

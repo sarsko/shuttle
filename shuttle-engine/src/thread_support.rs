@@ -1,4 +1,4 @@
-use crate::runtime::execution::ExecutionState;
+use crate::runtime::execution::{self, ExecutionState};
 use crate::runtime::task::{Event, EventKind};
 use crate::runtime::thread;
 use std::cell::{Cell, RefCell};
@@ -127,32 +127,29 @@ impl<T: 'static> LocalKey<T> {
 
     /// `try_with`, creating the slot, if it has to, as one that is destroyed after the thread's other
     /// slots if `destroyed_last` is set.
+    ///
+    /// The current task's storage is kept out of `ExecutionState` (see `TASK_STORAGE`), so this
+    /// works while Shuttle is updating its own state too, as in a `tracing` subscriber it calls then.
     fn try_with_slot<F, R>(&'static self, f: F, destroyed_last: bool) -> std::result::Result<R, AccessError>
     where
         F: FnOnce(&T) -> R,
     {
-        let value = self.slot().unwrap_or_else(|| {
-            let value = (self.init)();
-
-            // `init`, or a `tracing` subscriber of the event that `ExecutionState::with` emits, may
-            // have used this key, and so created the slot, since `get` found none. Keep that slot
-            // then, and drop the new value once the state is no longer borrowed.
-            let unused = ExecutionState::with(move |state| {
-                if state.current().local(self).is_none() {
-                    if destroyed_last {
-                        state.current_mut().init_local_destroyed_last(self, value);
-                    } else {
-                        state.current_mut().init_local(self, value);
-                    }
-                    None
+        let task = execution::expect_current_task_id();
+        let value = match execution::task_local::<T>(task, self.into()) {
+            Some(value) => value,
+            None => {
+                let value = (self.init)();
+                // `init` may have used this key, and so created the slot, since there was none.
+                // Keep that slot then.
+                if execution::task_local::<T>(task, self.into()).is_none() {
+                    execution::init_task_local(task, self.into(), value, destroyed_last);
                 } else {
-                    Some(value)
+                    drop(value);
                 }
-            });
-            drop(unused);
-
-            self.slot().unwrap()
-        })?;
+                execution::task_local::<T>(task, self.into()).expect("the slot was just created")
+            }
+        };
+        let value = value.map_err(|_| AccessError)?;
 
         Ok(f(value))
     }
@@ -171,20 +168,12 @@ impl<T: 'static> LocalKey<T> {
             return f(Some(value), Self::unwrap_slot(slot));
         }
 
-        // As in `try_with_slot`: a `tracing` subscriber of the event that `ExecutionState::with`
-        // emits may have created the slot since `slot` found none. Keep that slot then, and hand
-        // the unused value to `f`.
-        let unused = ExecutionState::with(move |state| {
-            if state.current().local(self).is_none() {
-                state.current_mut().init_local(self, value);
-                None
-            } else {
-                Some(value)
-            }
-        });
+        // Nothing runs between the lookup above and this, so nothing can have created the slot.
+        let task = execution::expect_current_task_id();
+        execution::init_task_local(task, self.into(), value, false);
 
         let slot = Self::unwrap_slot(self.slot().expect("the slot exists now"));
-        f(unused, slot)
+        f(None, slot)
     }
 
     fn unwrap_slot(slot: std::result::Result<&'static T, AccessError>) -> &'static T {
@@ -194,21 +183,11 @@ impl<T: 'static> LocalKey<T> {
         )
     }
 
+    /// The current task's slot for this key: `None` if it was never created, an error if it was
+    /// destroyed.
     fn slot(&'static self) -> Option<std::result::Result<&'static T, AccessError>> {
-        // Safety: see the usage below
-        unsafe fn extend_lt<'b, T>(t: &'_ T) -> &'b T {
-            std::mem::transmute(t)
-        }
-
-        ExecutionState::with(|state| {
-            if let Ok(value) = state.current().local(self)? {
-                // Safety: the `ExecutionState` outlives any thread, including the caller, and so
-                // it's safe to give the caller the lifetime it's asking for here.
-                Some(Ok(unsafe { extend_lt(value) }))
-            } else {
-                Some(Err(AccessError))
-            }
-        })
+        let task = execution::expect_current_task_id();
+        execution::task_local::<T>(task, self.into()).map(|value| value.map_err(|_| AccessError))
     }
 }
 
