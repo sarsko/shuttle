@@ -540,6 +540,10 @@ pub fn switch_with(event: Event) {
     crate::annotations::record_tick();
     trace!("switch before {}", event);
     if ExecutionState::maybe_yield_before(NextEvent::Operation(event)) {
+        // Other tasks run on this thread until this one is switched back in, and must not see its
+        // await-site state in the meantime. Nothing reads that state unless backtraces are enabled.
+        let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
+
         match suspend() {
             ContinuationInput::Exit => panic!("unexpected exit continuation"),
             ContinuationInput::Resume => {}
@@ -580,6 +584,9 @@ pub fn switch_before_poll() {
     crate::annotations::record_tick();
     trace!("switch before poll");
     if ExecutionState::maybe_yield_before(NextEvent::Poll) {
+        // As in `switch`: the task's await-site state is set aside while other tasks run.
+        let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
+
         match suspend() {
             ContinuationInput::Exit => panic!("unexpected exit continuation"),
             ContinuationInput::Resume => {}
@@ -598,7 +605,14 @@ pub fn switch_before_poll() {
 pub(crate) fn switch_between_polls() -> bool {
     crate::annotations::record_tick();
     trace!("switch between polls");
-    ExecutionState::maybe_yield_before(NextEvent::Poll) && suspend() == ContinuationInput::Cancel
+    if !ExecutionState::maybe_yield_before(NextEvent::Poll) {
+        return false;
+    }
+
+    // As in `switch`: the task's await-site state is set aside while other tasks run.
+    let _await_site_state = crate::backtrace_enabled().then(crate::await_backtrace::SwitchGuard::new);
+
+    suspend() == ContinuationInput::Cancel
 }
 
 /// Suspend the current task's continuation, and return what it is resumed with.
