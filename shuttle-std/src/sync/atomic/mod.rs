@@ -38,7 +38,8 @@
 //! This code is incorrect because of the relaxed orderings used for the loads and stores. Some
 //! architectures will allow an execution where `flag` is true but the assertion is false. However,
 //! Shuttle treats all atomic operations as SeqCst, and this test would be correct if we used SeqCst
-//! for all atomic operations, so Shuttle cannot find this bug.
+//! for all atomic operations, so Shuttle cannot find this bug, unless the test turns on the
+//! weak-memory emulation described below.
 //!
 //! If you are writing code that relies on relaxed atomic operations and need to check its
 //! correctness, the [Loom] crate provides support for reasoning about Acquire and Release orderings
@@ -49,10 +50,59 @@
 //! [`Config`](shuttle_engine::Config) to true.
 //!
 //! [Loom]: https://crates.io/crates/loom
+//!
+//! # Weak-memory emulation
+//!
+//! With the `weak-memory` feature, a test can set
+//! [`weak_memory`](shuttle_engine::Config::weak_memory) in its [`Config`](shuttle_engine::Config)
+//! to make atomic loads return older stores, as orderings weaker than SeqCst allow. The emulation is
+//! a port of [Miri's](https://github.com/rust-lang/miri). Each atomic keeps its last 128 stores, and
+//! a load reads one of those that coherence, happens-before and the SeqCst rules still allow. The
+//! store is picked with the scheduler's random numbers, so a failing schedule replays. The test
+//! above then finds the bug:
+//! ```no_run
+//! # use shuttle_std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+//! # use shuttle_std::sync::Arc;
+//! # use shuttle_std::thread;
+//! # use shuttle_engine::{Config, Runner};
+//! # use shuttle_schedulers::RandomScheduler;
+//! let mut config = Config::new();
+//! config.weak_memory = true;
+//! Runner::new(RandomScheduler::new(1000), config).run(|| {
+//!     let flag = Arc::new(AtomicBool::new(false));
+//!     let data = Arc::new(AtomicU64::new(0));
+//!     {
+//!         let flag = Arc::clone(&flag);
+//!         let data = Arc::clone(&data);
+//!         thread::spawn(move || {
+//!             data.store(42, Ordering::Relaxed);
+//!             flag.store(true, Ordering::Relaxed);
+//!         });
+//!     }
+//!     if flag.load(Ordering::Relaxed) {
+//!         assert_eq!(data.load(Ordering::Relaxed), 42); // fails in some executions
+//!     }
+//! });
+//! ```
+//!
+//! What the emulation does not do:
+//! - It produces only some of the outcomes that the memory model allows. A load reads only stores
+//!   that the schedule has already run, so outcomes that need a load to read a later store, such
+//!   as "load buffering", never show up. SeqCst fences synchronize with each other, which is
+//!   stronger than C++20 requires.
+//! - It applies only to Shuttle's atomics. Memory that isn't atomic always holds the latest write,
+//!   so a bug in which a too-weak ordering publishes non-atomic data shows up only if the data is
+//!   read through an atomic.
+//! - The DFS scheduler doesn't explore which store a load reads. It panics when a load has a
+//!   choice, unless it was created with `allow_random_data`. Then every execution gets the same
+//!   random numbers, so DFS tries only some of the choices.
+//! - `compare_exchange_weak` never fails spuriously.
 
 mod bool;
 mod int;
 mod ptr;
+#[cfg(feature = "weak-memory")]
+mod weak_memory;
 
 pub use self::bool::AtomicBool;
 pub use int::*;
@@ -85,7 +135,7 @@ fn maybe_warn_about_ordering(order: Ordering) {
                 return;
             }
 
-            if ExecutionState::with(|state| state.config.silence_warnings) {
+            if ExecutionState::with(|state| state.config.silence_warnings || state.config.weak_memory) {
                 return;
             }
 
@@ -109,7 +159,13 @@ pub fn fence(order: Ordering) {
 
     maybe_warn_about_ordering(order);
 
-    // SeqCst fences are no-ops in our execution model
+    #[cfg(feature = "weak-memory")]
+    if weak_memory::enabled() {
+        thread::switch();
+        weak_memory::fence(order);
+    }
+
+    // Without weak-memory emulation, every access is SeqCst, so fences are no-ops
 }
 
 // We can just reuse the standard library's compiler fence, as they have no visible run-time
@@ -157,6 +213,10 @@ struct AtomicState<T> {
     // mechanism, which will carry the knowledge about the owning thread's clock.
     // TODO Check that the argument above is sound
     clock: RefCell<VectorClock>,
+    // the stores that loads can still read, when the execution emulates weak memory. `value` holds
+    // the newest one's value either way.
+    #[cfg(feature = "weak-memory")]
+    stores: RefCell<weak_memory::StoreBuffer<T>>,
 }
 
 impl<T: Copy + std::fmt::Debug + 'static> std::fmt::Debug for Atomic<T> {
@@ -193,6 +253,8 @@ impl<T: Copy + 'static> Atomic<T> {
         AtomicState {
             value: Cell::new(self.init),
             clock: RefCell::new(VectorClock::new()),
+            #[cfg(feature = "weak-memory")]
+            stores: RefCell::new(weak_memory::StoreBuffer::new()),
         }
     }
 
@@ -207,6 +269,10 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
     fn get_mut(&mut self) -> &mut T {
         let state = self.state();
         exhale_clock(state);
+        // Every earlier access happens before an exclusive one, so later loads can only read the
+        // value it leaves.
+        #[cfg(feature = "weak-memory")]
+        state.stores.borrow_mut().clear();
         // Safety: `&mut self` rules out any other reference to the atomic, and so to its state, for
         // as long as the returned reference lives.
         unsafe { &mut *state.value.as_ptr() }
@@ -226,6 +292,10 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         // The execution's state of the atomic, looked up once: for a `static` atomic the lookup
         // goes through the execution's storage (see `PerExecution`).
         let state = self.state();
+        #[cfg(feature = "weak-memory")]
+        if weak_memory::enabled() {
+            return weak_memory::load(&state.stores, &state.value, order);
+        }
         exhale_clock(state);
         state.value.get()
     }
@@ -236,6 +306,10 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
 
         thread::switch_with(Event::on_resource(EventKind::AtomicStore, &self.signature));
         let state = self.state();
+        #[cfg(feature = "weak-memory")]
+        if weak_memory::enabled() {
+            return weak_memory::store(&state.stores, &state.value, val, order);
+        }
         inhale_clock(state);
         state.value.set(val);
     }
@@ -247,6 +321,11 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         // swap behaves like { let x = load() ; store(val) ; x }
         thread::switch_with(Event::on_resource(EventKind::AtomicReadModifyWrite, &self.signature));
         let state = self.state();
+        #[cfg(feature = "weak-memory")]
+        if weak_memory::enabled() {
+            // The closure always returns a value, so this is always `Ok`.
+            return weak_memory::rmw(&state.stores, &state.value, order, order, |_| Some(val)).unwrap_or_else(|old| old);
+        }
         exhale_clock(state); // for the load
         inhale_clock(state); // for the store
         state.value.replace(val)
@@ -269,6 +348,10 @@ impl<T: Copy + Eq + 'static> Atomic<T> {
         // instead, just like `std`.
         thread::switch_with(Event::on_resource(EventKind::AtomicReadModifyWrite, &self.signature));
         let state = self.state();
+        #[cfg(feature = "weak-memory")]
+        if weak_memory::enabled() {
+            return weak_memory::rmw(&state.stores, &state.value, set_order, fetch_order, f);
+        }
         exhale_clock(state); // for the load()
         let current = state.value.get();
         if let Some(new) = f(current) {
