@@ -5,6 +5,7 @@
 //! The [`shuttle`](https://crates.io/crates/shuttle) crate re-exports all of them, and that is how
 //! a test usually reaches them.
 
+pub mod cell;
 pub mod future;
 pub mod sync;
 pub mod thread;
