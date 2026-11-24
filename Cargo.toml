@@ -38,6 +38,10 @@ members = [
     "wrappers/spin/shuttle_spin_inner",
     "wrappers/arc_swap",
     "wrappers/arc_swap/shuttle_arc_swap_inner",
+    "wrappers/crossbeam_channel",
+    "wrappers/crossbeam_channel/shuttle_crossbeam_channel_inner",
+    "wrappers/crossbeam_utils",
+    "wrappers/crossbeam_utils/shuttle_crossbeam_utils_inner",
 ]
 
 resolver = "2"
