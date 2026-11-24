@@ -43,3 +43,4 @@ weak-memory = ["vector-clocks"]
 # found with the vector clocks, so `checked-cell` implies `vector-clocks`.
 checked-cell = ["vector-clocks"]
 bench-no-vector-clocks = []
+advanced-time-models = []
