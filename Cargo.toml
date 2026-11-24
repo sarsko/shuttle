@@ -12,6 +12,7 @@ members = [
     "wrappers/shuttle_sync",
     "wrappers/thread",
     "wrappers/thread/thread_impl",
+    "wrappers/backdoor",
     "wrappers/collections",
     "wrappers/collections/deterministic_collections",
     "wrappers/collections/std_collections",
