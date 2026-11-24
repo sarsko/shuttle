@@ -34,6 +34,8 @@ members = [
     "wrappers/uuid/shuttle_uuid_inner",
     "wrappers/once_cell",
     "wrappers/once_cell/shuttle_once_cell_inner",
+    "wrappers/spin",
+    "wrappers/spin/shuttle_spin_inner",
 ]
 
 resolver = "2"
