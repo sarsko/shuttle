@@ -1,6 +1,7 @@
 use crate::config::UNGRACEFUL_SHUTDOWN_CONFIG;
 use crate::runtime::execution::{ExecutionState, NextEvent};
 use crate::runtime::task::{Event, EventKind};
+use crate::time::step_time_model;
 use corosensei::Yielder;
 use corosensei::{stack::DefaultStack, Coroutine, CoroutineResult};
 use scoped_tls::scoped_thread_local;
@@ -488,6 +489,7 @@ pub fn switch_with(event: Event) {
             ContinuationInput::Cancel => unreachable!("only a task that is between polls is cancelled"),
         }
     }
+    step_time_model();
 }
 
 /// Like `switch`, but does nothing where the current task can't switch: outside of an execution, while

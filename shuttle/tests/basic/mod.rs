@@ -32,6 +32,7 @@ mod tag;
 mod task;
 mod teardown;
 mod thread;
+mod time;
 mod timed_wait;
 mod timeout;
 mod tracing;

@@ -3,12 +3,14 @@
 use shuttle_engine::runtime::execution::ExecutionState;
 use shuttle_engine::runtime::task::{Event, EventKind, TaskId};
 use shuttle_engine::runtime::thread;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::panic::Location;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+pub use shuttle_engine::time::sleep;
 pub use std::thread::{panicking, Result};
 
 /// A unique identifier for a running thread
@@ -417,13 +419,6 @@ pub fn yield_now() {
     waker.wake_by_ref();
     ExecutionState::request_yield();
     thread::switch_with(Event::untargeted(EventKind::Yield));
-}
-
-/// Puts the current thread to sleep for at least the specified amount of time.
-// Note that Shuttle does not model time, so this behaves just like a context switch.
-#[track_caller]
-pub fn sleep(_dur: Duration) {
-    thread::switch_with(Event::untargeted(EventKind::Sleep));
 }
 
 /// Puts the current thread to sleep for at least the specified number of milliseconds.

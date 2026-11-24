@@ -191,6 +191,7 @@ pub mod lazy_static;
 pub mod rand;
 pub mod sync;
 pub mod thread;
+pub mod time;
 
 pub mod scheduler;
 
@@ -212,7 +213,7 @@ pub(crate) use shuttle_engine::silence_warnings;
 // Re-export check/replay functions from shuttle-schedulers
 pub use shuttle_schedulers::{
     check, check_dfs, check_pct, check_pos, check_random, check_random_with_seed, check_uncontrolled_nondeterminism,
-    check_urw, replay, replay_from_file,
+    check_urw, replay, replay_from_file, replay_from_file_with_time_model, replay_with_time_model,
 };
 
 #[cfg(feature = "annotation")]
